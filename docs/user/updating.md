@@ -63,3 +63,12 @@ download updates in the background and apply them when you next leave the app.
 It saves drafts and queued messages before restarting. If you keep the app open
 for a long time, it may ask to install immediately; choosing **Later** leaves the
 update queued for the next suitable moment.
+
+## Personal fork updates
+
+Official nightlies are merged and built for your personal fork before appearing
+as an app update. If a merge is blocked, the sidebar shows **Official update
+needs a merge**. Choose **Finish with an agent** to open a repair draft in T3 with
+the affected release and conflicting files. Send it to start the repair. The
+notice clears after the merge is resolved; the resulting build arrives through
+the normal app updater.

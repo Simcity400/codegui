@@ -40,6 +40,16 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: node scripts/fork-sync.ts check
+      # A hand-finished merge lands with the blocked tag already recorded, so no
+      # sync job runs to clear the marker; a current main clears it here instead.
+      - name: Clear the blocked-sync marker once main is current
+        if: steps.check.outputs.sync != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/needs-merge-help" >/dev/null 2>&1; then
+            gh api --method DELETE "repos/$GITHUB_REPOSITORY/git/refs/heads/needs-merge-help"
+          fi
 
   sync:
     name: Integrate the published official nightly
@@ -64,14 +74,34 @@ jobs:
       - id: merge
         env:
           NIGHTLY_TAG: ${{ needs.gate.outputs.tag }}
+          FORK_SYNC_CONFLICTS_FILE: ${{ runner.temp }}/fork-sync-conflicts.json
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           node scripts/fork-sync.ts merge
           git push origin HEAD:main
-      - name: Report blocked sync
+      # The installed app reads this branch and stops showing the notice.
+      - name: Clear the blocked-sync marker
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/needs-merge-help" >/dev/null 2>&1; then
+            gh api --method DELETE "repos/$GITHUB_REPOSITORY/git/refs/heads/needs-merge-help"
+          fi
+      # A stopped merge raises the in-app notice; a conflict also names its files.
+      - name: Publish the blocked-sync marker
         if: failure() && steps.merge.outcome == 'failure'
-        run: echo 'The official nightly could not be integrated. See the merge log for the conflict or failure. The last successful build remains available.' >> "$GITHUB_STEP_SUMMARY"
+        env:
+          NIGHTLY_TAG: ${{ needs.gate.outputs.tag }}
+          FORK_SYNC_CONFLICTS_FILE: ${{ runner.temp }}/fork-sync-conflicts.json
+          FORK_SYNC_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git merge --abort 2>/dev/null || true
+          git reset -q --hard origin/main && git clean -qfd
+          node scripts/fork-sync.ts mark-blocked
+          echo 'The official nightly could not be integrated. The installed app now shows the merge notice; the app keeps its last successful build.' >> "$GITHUB_STEP_SUMMARY"
 
   release:
     name: Publish the personal Windows update

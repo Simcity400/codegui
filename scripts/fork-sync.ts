@@ -1,4 +1,4 @@
-// @effect-diagnostics nodeBuiltinImport:off globalConsole:off - CI bootstrap runs before dependencies are installed.
+// @effect-diagnostics nodeBuiltinImport:off globalConsole:off globalDate:off - CI bootstrap runs before dependencies are installed.
 import * as NodeChildProcess from "node:child_process";
 import * as NodeFS from "node:fs";
 import * as NodePath from "node:path";
@@ -18,6 +18,10 @@ const forkWorkflows = new Set([
   "fork-mobile-preview.yml",
   "fork-checks.yml",
 ]);
+/** The marker branch the installed app reads when a sync stops (see markSyncBlocked). */
+export const SYNC_BLOCKED_BRANCH = "needs-merge-help";
+export const SYNC_BLOCKED_FILE = "fork-sync-status.json";
+
 // No parameter properties: CI runs this file through Node type stripping.
 export class NightlyMergeConflict extends Error {
   readonly tag: string;
@@ -27,6 +31,16 @@ export class NightlyMergeConflict extends Error {
     this.tag = tag;
     this.conflicts = conflicts;
   }
+}
+
+export interface SyncBlockedStatus {
+  readonly repository: string;
+  readonly tag: string;
+  readonly commit: string | null;
+  readonly conflicts: ReadonlyArray<string>;
+  readonly reason: string | null;
+  readonly runUrl: string | null;
+  readonly at: string;
 }
 
 export function latestNightly(releases: ReadonlyArray<Release>): Release {
@@ -140,6 +154,47 @@ export function syncNightly(cwd: string, upstream: string, tag: string): string 
   }
 }
 
+/**
+ * Records a stopped sync where the installed app can see it: a
+ * `needs-merge-help` branch on top of the current main holding
+ * `fork-sync-status.json`. The desktop updater reads that file with the
+ * public update feed and shows the notice; a later successful sync deletes
+ * the branch. Runs on a clean checkout (the merge has been aborted) and
+ * leaves the checkout on the branch it found.
+ */
+export function markSyncBlocked(cwd: string, status: SyncBlockedStatus): string {
+  if (git(cwd, "status", "--porcelain"))
+    throw new Error("Marking a blocked sync requires a clean checkout.");
+  const original = git(cwd, "rev-parse", "--abbrev-ref", "HEAD");
+  const base = git(cwd, "rev-parse", "HEAD");
+  try {
+    git(cwd, "checkout", "-q", "-B", SYNC_BLOCKED_BRANCH, base);
+    NodeFS.writeFileSync(
+      NodePath.join(cwd, SYNC_BLOCKED_FILE),
+      JSON.stringify(status, null, 2) + "\n",
+    );
+    git(cwd, "add", SYNC_BLOCKED_FILE);
+    git(cwd, "commit", "-q", "-m", `chore(fork): sync blocked on ${status.tag}`);
+    git(cwd, "push", "--force", "origin", `HEAD:refs/heads/${SYNC_BLOCKED_BRANCH}`);
+    return git(cwd, "rev-parse", "HEAD");
+  } finally {
+    git(cwd, "checkout", "-q", original === "HEAD" ? base : original);
+  }
+}
+
+/** The commit a tag names; nightlies are lightweight, so prefer the peeled ref when there is one. */
+export function resolveTagCommit(remote: string, tag: string): string | null {
+  const listed = NodeChildProcess.spawnSync(
+    "git",
+    ["ls-remote", "--tags", remote, `refs/tags/${tag}`, `refs/tags/${tag}^{}`],
+    { encoding: "utf8" },
+  );
+  const lines = (listed.stdout ?? "").trim().split("\n").filter(Boolean);
+  const peeled = lines.find((line) => line.endsWith("^{}"));
+  const commit = (peeled ?? lines[0])?.split(/\s+/)[0];
+  return commit && /^[a-f0-9]{40}$/.test(commit) ? commit : null;
+}
+
 function output(name: string, value: string | boolean) {
   if (!process.env.GITHUB_OUTPUT) throw new Error("This command requires GITHUB_OUTPUT.");
   NodeFS.appendFileSync(process.env.GITHUB_OUTPUT, `${name}=${value}\n`);
@@ -180,9 +235,51 @@ if (import.meta.main) {
       `Official nightly: ${upstream.tag_name}; integrated: ${tracked.tag}; sync: ${plan.sync}; publish: ${plan.release}`,
     );
   } else if (process.argv[2] === "merge") {
-    output(
-      "ref",
-      syncNightly(cwd, "https://github.com/pingdotgg/t3code.git", process.env.NIGHTLY_TAG ?? ""),
+    try {
+      output(
+        "ref",
+        syncNightly(cwd, "https://github.com/pingdotgg/t3code.git", process.env.NIGHTLY_TAG ?? ""),
+      );
+    } catch (error) {
+      // The failure step publishes the marker after this process has stopped,
+      // so the cause must survive it.
+      if (process.env.FORK_SYNC_CONFLICTS_FILE) {
+        NodeFS.writeFileSync(
+          process.env.FORK_SYNC_CONFLICTS_FILE,
+          JSON.stringify({
+            conflicts: error instanceof NightlyMergeConflict ? error.conflicts : [],
+            reason: error instanceof NightlyMergeConflict ? null : String(error),
+          }) + "\n",
+        );
+      }
+      throw error;
+    }
+  } else if (process.argv[2] === "mark-blocked") {
+    const tag = process.env.NIGHTLY_TAG ?? "";
+    if (!nightlyTag.test(tag)) throw new Error("Invalid official nightly tag.");
+    const conflictsFile = process.env.FORK_SYNC_CONFLICTS_FILE;
+    const cause =
+      conflictsFile && NodeFS.existsSync(conflictsFile)
+        ? (JSON.parse(NodeFS.readFileSync(conflictsFile, "utf8")) as {
+            conflicts: ReadonlyArray<string>;
+            reason: string | null;
+          })
+        : null;
+    const conflicts = cause?.conflicts ?? [];
+    console.log(
+      markSyncBlocked(cwd, {
+        repository: repo,
+        tag,
+        commit: resolveTagCommit("https://github.com/pingdotgg/t3code.git", tag),
+        conflicts,
+        reason:
+          conflicts.length > 0
+            ? null
+            : (cause?.reason ??
+              "The sync run failed before a merge could be judged. Read the run log."),
+        runUrl: process.env.FORK_SYNC_RUN_URL ?? null,
+        at: new Date().toISOString(),
+      }),
     );
   } else if (process.argv[2] === "verify-release") {
     const id = process.env.RELEASE_ID;
@@ -196,5 +293,5 @@ if (import.meta.main) {
       throw new Error(
         "The draft release is missing a Windows installer, blockmap or update manifest.",
       );
-  } else throw new Error("Expected check, merge or verify-release.");
+  } else throw new Error("Expected check, merge, mark-blocked or verify-release.");
 }

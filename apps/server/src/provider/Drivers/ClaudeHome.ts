@@ -2,6 +2,7 @@ import * as NodeOS from "node:os";
 
 import type { ClaudeSettings } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 
@@ -38,9 +39,26 @@ export const makeClaudeEnvironment = Effect.fn("makeClaudeEnvironment")(function
 });
 
 export const makeClaudeContinuationGroupKey = Effect.fn("makeClaudeContinuationGroupKey")(
-  function* (config: Pick<ClaudeSettings, "homePath">): Effect.fn.Return<string, never, Path.Path> {
-    const resolvedHomePath = yield* resolveClaudeHomePath(config);
-    return `claude:home:${resolvedHomePath}`;
+  function* (
+    config: Pick<ClaudeSettings, "homePath">,
+    baseEnv?: NodeJS.ProcessEnv,
+  ): Effect.fn.Return<string, never, Path.Path | FileSystem.FileSystem> {
+    const path = yield* Path.Path;
+    const fileSystem = yield* FileSystem.FileSystem;
+    const env = yield* makeClaudeEnvironment(config, baseEnv);
+    const configDir = env.CLAUDE_CONFIG_DIR || path.join(NodeOS.homedir(), ".claude");
+    // Relative environment paths are interpreted from each thread's cwd by
+    // Claude, so they cannot be equated with an absolute server-side path.
+    if (!path.isAbsolute(configDir)) {
+      return `claude:projects:relative:${path.join(configDir, "projects")}`;
+    }
+    const projectsPath = path.resolve(configDir, "projects");
+    // Accounts can keep separate credentials while sharing conversation files
+    // through a directory symlink or Windows junction.
+    const resolvedProjectsPath = yield* fileSystem
+      .realPath(projectsPath)
+      .pipe(Effect.orElseSucceed(() => projectsPath));
+    return `claude:projects:${resolvedProjectsPath}`;
   },
 );
 

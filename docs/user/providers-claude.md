@@ -30,9 +30,10 @@ location intact. Use the same variable for the login command. Setting `HOME`
 instead can put credentials where this provider will not find them.
 
 Check the account reported in provider settings after signing in. Existing
-threads can switch only between Claude instances with the same config directory.
-Separate account directories stay isolated, including their local conversation
-state. Claude does not have Codex's shared-home and shadow-home arrangement.
+threads can switch between Claude instances that share the same conversation
+directory (`projects` inside the config directory), including through a directory
+symlink or Windows junction. Separate conversation directories stay isolated.
+Claude does not automatically share conversation state between account directories.
 
 For presets that differ only in API keys or endpoints, use the instance's
 **Environment variables**. Variable assignments do not belong in **Launch arguments**.
@@ -87,8 +88,15 @@ If that Claude config directory has a cached Anthropic login, run `/logout` in a
 Claude Code session using that directory before starting the router setup. Cached
 login credentials can conflict with the router token.
 
-Verify requests in OpenRouter's activity dashboard. For model-role overrides and
-current compatibility requirements, use the
+Select the model you want in T3 Code. For an OpenRouter model outside the built-in
+list, open that Claude instance in **Settings > Providers** and add its full model
+ID with **Add custom model**. Then select it in the chat model picker.
+`ANTHROPIC_DEFAULT_*_MODEL` variables map Claude Code aliases such as `sonnet`; they
+do not replace the explicit model ID selected in T3 Code. Custom models may have
+fewer effort, thinking, or context controls than built-in models.
+
+Verify the model used in OpenRouter's activity dashboard. For current compatibility
+requirements, use the
 [OpenRouter Claude Code guide](https://openrouter.ai/docs/cookbook/coding-agents/claude-code-integration).
 
 ## Other routers

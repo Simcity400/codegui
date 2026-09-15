@@ -1,3 +1,4 @@
+import { CustomSnoozeSheet } from "./CustomSnoozeSheet";
 import { useAppearancePreferences } from "../settings/appearance/AppearancePreferencesProvider";
 import { appAtomRegistry } from "../../state/atom-registry";
 import { threadArrangementOpenAtom } from "../../state/thread-order";
@@ -471,6 +472,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
     [onRegenerateThreadTitle, thread],
   );
   const handleSettle = useCallback(() => onSettleThread(thread), [onSettleThread, thread]);
+  const [customSnoozeOpen, setCustomSnoozeOpen] = useState(false);
   const handleSnooze = useCallback(
     (snoozedUntil: string) => onSnoozeThread(thread, snoozedUntil),
     [onSnoozeThread, thread],
@@ -508,12 +510,14 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
     [props.snoozePresetMinute, swipeActions.secondary],
   );
   const snoozePresetActions = useMemo<MenuAction[]>(
-    () =>
-      snoozePresets.map((preset) => ({
+    () => [
+      ...snoozePresets.map((preset) => ({
         id: `snooze:${preset.id}`,
         title: preset.label,
         subtitle: preset.whenLabel,
       })),
+      { id: "snooze:custom", title: "Custom…" },
+    ],
     [snoozePresets],
   );
   // Pinned cards keep the full lifecycle menu; only the pin item flips to
@@ -625,6 +629,10 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
       if (nativeEvent.event === "archive") handleArchive();
       if (nativeEvent.event === "regenerate-title") handleRegenerateTitle();
       if (nativeEvent.event === "delete") handleDelete();
+      if (nativeEvent.event === "snooze:custom") {
+        setCustomSnoozeOpen(true);
+        return;
+      }
       const snoozeSelection = resolveThreadListV2SnoozeMenuSelection({
         event: nativeEvent.event,
         displayedPresets: snoozePresets,
@@ -871,16 +879,22 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
         )}
         {pr ? (
           <View className="flex-row items-center gap-1" accessibilityLabel={pr.accessibilityLabel}>
-            {pr.kind === "stack" ? (
+            {pr.kind === "stack" || pr.others > 0 ? (
               <SymbolView
-                name="square.3.layers.3d"
+                name={pr.kind === "stack" ? "square.3.layers.3d" : "arrow.triangle.pull"}
                 size={12}
                 tintColorClassName={
                   selected
                     ? materialYouStyleLayoutActive
                       ? "accent-thread-selected-foreground"
                       : "accent-user-bubble-foreground"
-                    : "accent-foreground-muted"
+                    : pr.state === null || pr.isDraft
+                      ? "accent-foreground-muted"
+                      : pr.state === "open"
+                        ? "accent-adaptive-emerald-600-400"
+                        : pr.state === "closed"
+                          ? "accent-adaptive-rose-600-400"
+                          : "accent-adaptive-violet-600-400"
                 }
               />
             ) : null}
@@ -896,7 +910,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
               )}
               style={{ fontFamily: MONO_FONT }}
             >
-              {pr.kind === "stack" ? pr.label : `#${pr.label}`}
+              {pr.kind === "stack" || pr.others > 0 ? pr.label : `#${pr.label}`}
             </Text>
           </View>
         ) : null}
@@ -1050,6 +1064,9 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
 
   return (
     <>
+      {customSnoozeOpen && (
+        <CustomSnoozeSheet onClose={() => setCustomSnoozeOpen(false)} onSnooze={handleSnooze} />
+      )}
       <ThreadSwipeable
         threadKey={`${thread.environmentId}:${thread.id}`}
         backgroundColor={sidebarPane ? drawerColor : screenColor}

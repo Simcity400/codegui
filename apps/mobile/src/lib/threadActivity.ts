@@ -1,4 +1,5 @@
 import * as Option from "effect/Option";
+import { foldUserInputActivities } from "@t3tools/client-runtime/work-log/user-input";
 import * as Schema from "effect/Schema";
 import {
   requestKindFromRequestType,
@@ -170,7 +171,7 @@ export type ThreadFeedEntry =
       readonly summaryKind: ToolGroupSummaryKind;
       readonly toolSurface?: WorkLogEntry["toolSurface"];
       readonly toolIcon?: WorkLogEntry["toolIcon"];
-      readonly summaryToolIcon?: "browser" | "t3-code" | "pull-request";
+      readonly summaryToolIcon?: "browser" | "device" | "t3-code" | "pull-request";
       readonly hasFailure: boolean;
       readonly live: boolean;
       readonly shimmer: boolean;
@@ -265,6 +266,10 @@ export function isContextCompactionActivityGroup(
     entry.activities.length === 1 &&
     entry.activities[0]?.workEntry.sourceActivityKind === "context-compaction"
   );
+}
+
+function isUserInputActivityGroup(entry: ThreadFeedActivityGroup): boolean {
+  return entry.activities.some((activity) => activity.workEntry.questionAnswer !== undefined);
 }
 
 function normalizeDraftAnswer(value: string | undefined): string | null {
@@ -409,7 +414,7 @@ function deriveWorkLogEntries(
 ): DerivedWorkLogEntry[] {
   const ordered = Arr.sort(activities, activityOrder);
   const entries: DerivedWorkLogEntry[] = [];
-  for (const activity of ordered) {
+  for (const activity of foldUserInputActivities(ordered)) {
     if (activity.tone !== "error" && isWorktreeSetupActivity(activity.kind)) continue;
     if (activity.kind === "tool.started") continue;
     // Like web: an agent's task.started row anchors its batch. It has a fixed
@@ -940,6 +945,7 @@ function workEntryStatus(entry: WorkLogEntry): ThreadFeedActivity["status"] {
 function workEntryIcon(entry: DerivedWorkLogEntry): ThreadFeedActivity["icon"] {
   if (entry.agentSpawn) return "agent";
   if (
+    entry.questionAnswer ||
     entry.sourceActivityKind === "user-input.requested" ||
     entry.sourceActivityKind === "user-input.resolved"
   ) {
@@ -1560,13 +1566,15 @@ function groupAdjacentActivities(entries: ReadonlyArray<RawThreadFeedEntry>): Th
       continue;
     }
 
-    const isCompaction = entry.activity.workEntry.sourceActivityKind === "context-compaction";
-    if (isCompaction || firstActivityEntry?.turnId !== entry.turnId) {
+    const isStandalone =
+      entry.activity.workEntry.sourceActivityKind === "context-compaction" ||
+      entry.activity.workEntry.questionAnswer !== undefined;
+    if (isStandalone || firstActivityEntry?.turnId !== entry.turnId) {
       flushGroup();
     }
     firstActivityEntry ??= entry;
     openGroupActivities.push(entry.activity);
-    if (isCompaction) {
+    if (isStandalone) {
       flushGroup();
     }
   }
@@ -1672,7 +1680,9 @@ function deriveThreadFeedTurnFolds(
       entries
         .filter(
           (entry) =>
-            entry.id !== firstAssistantMessageId && entry.id !== terminalAssistantMessageId,
+            entry.id !== firstAssistantMessageId &&
+            entry.id !== terminalAssistantMessageId &&
+            !(entry.type === "activity-group" && isUserInputActivityGroup(entry)),
         )
         .map((entry) => entry.id),
     );
@@ -1852,7 +1862,7 @@ function appendPresentedFeedEntry(
     result.push(entry);
     return;
   }
-  if (isContextCompactionActivityGroup(entry)) {
+  if (isContextCompactionActivityGroup(entry) || isUserInputActivityGroup(entry)) {
     result.push(entry);
     return;
   }
@@ -2206,11 +2216,22 @@ export function buildThreadFeed(
     : loadedMessages;
   const oldestLoadedMessageCreatedAt =
     options?.loadedMessages !== undefined ? (loadedMessages[0]?.createdAt ?? null) : null;
-  const activityEntries = getThreadFeedActivityEntries(thread.activities);
+  const activityEntries = getThreadFeedActivityEntries(thread.activities).filter(
+    (entry) =>
+      oldestLoadedMessageCreatedAt === null || entry.createdAt >= oldestLoadedMessageCreatedAt,
+  );
+  const foldedAnswerMessageIds = new Set(
+    activityEntries.flatMap((entry) =>
+      entry.activity.workEntry.questionAnswer
+        ? [`async-answer:${entry.activity.workEntry.questionAnswer.requestId}`]
+        : [],
+    ),
+  );
   const entries = Arr.sortWith(
     [
       ...messages
         .filter((message) => !isAgentMessage(message))
+        .filter((message) => message.role !== "user" || !foldedAnswerMessageIds.has(message.id))
         .map((message) => {
           let entry = messageEntriesCache.get(message);
           if (!entry) {

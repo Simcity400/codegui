@@ -132,7 +132,6 @@ export function SideChatPanel(props: {
       (value.images.length ||
         value.files.length ||
         value.terminalContexts.length ||
-        value.elementContexts.length ||
         value.previewAnnotations.length ||
         value.reviewComments.length),
     );

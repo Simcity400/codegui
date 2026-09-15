@@ -126,6 +126,7 @@ function renderTabs(
       onAddSideChat={() => undefined}
       onOpenSideChat={() => undefined}
       sideChatAvailable={false}
+      onAddDevice={() => undefined}
       liveAgentCount={0}
       browserAvailable
       terminalAvailable={false}
@@ -134,6 +135,7 @@ function renderTabs(
       pullRequestAvailable={false}
       pullRequestsAvailable={false}
       agentsAvailable={false}
+      deviceAvailable={false}
     >
       <div>content</div>
     </RightPanelTabs>,
