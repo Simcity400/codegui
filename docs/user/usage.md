@@ -60,7 +60,9 @@ the bar show each account's quota, countdown, and credits. Tap a row to open its
 The same account signed in on more than one environment, or reported by a hub as well, counts once.
 Filter with the environment dropdown to see what a single machine has.
 
-If a window looks stale, refresh Limits to re-check every provider and hub.
+Opening Limits checks the selected connected environments automatically. Each client waits at
+least five minutes between automatic checks of an environment, including after a failed check.
+If a window still looks stale, refresh Limits to re-check every provider and hub.
 
 The ring at the right of the composer shows how full the thread's context window is. Hover or
 tap it to see the exact figure and, below it, the selected account's subscription windows with
