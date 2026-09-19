@@ -32,6 +32,7 @@ import * as ElectronWindow from "../electron/ElectronWindow.ts";
 import * as IpcChannels from "../ipc/channels.ts";
 import * as DesktopAppSettings from "../settings/DesktopAppSettings.ts";
 import { normalizeDesktopUpdateReleaseNotes } from "./releaseNotes.ts";
+import { fetchUpstreamMergeStatus, isSameUpstreamMergeStatus } from "./upstreamMerge.ts";
 import { resolveDefaultDesktopUpdateChannel } from "./updateChannels.ts";
 import {
   createInitialDesktopUpdateState,
@@ -391,6 +392,28 @@ export const make = Effect.gen(function* () {
 
   const shouldEnableAutoUpdates = resolveDisabledReason.pipe(Effect.map(Option.isNone));
 
+  const refreshUpstreamMergeStatus = Effect.gen(function* () {
+    const feed = yield* Ref.get(appUpdateYmlConfigRef);
+    if (Option.isNone(feed) || feed.value.provider !== "github") return;
+    const { owner, repo } = feed.value;
+    if (
+      !owner ||
+      !repo ||
+      owner === "pingdotgg" ||
+      !/^[\w.-]+$/.test(owner) ||
+      !/^[\w.-]+$/.test(repo)
+    )
+      return;
+    const current = (yield* Ref.get(updateStateRef)).upstreamMerge ?? null;
+    const upstreamMerge = yield* fetchUpstreamMergeStatus({ owner, repo }).pipe(
+      Effect.timeout("10 seconds"),
+      Effect.orElseSucceed(() => current),
+    );
+    if (!isSameUpstreamMergeStatus(current, upstreamMerge)) {
+      yield* updateState((state) => ({ ...state, upstreamMerge }));
+    }
+  }).pipe(Effect.withSpan("desktop.updates.refreshUpstreamMergeStatus"));
+
   const checkForUpdates = Effect.fn("desktop.updates.checkForUpdates")(function* (
     reason: string,
     actionReservation: "acquire" | "held" = "acquire",
@@ -432,6 +455,7 @@ export const make = Effect.gen(function* () {
             return true;
           }),
         }),
+        Effect.tap(() => refreshUpstreamMergeStatus),
       );
     });
 
