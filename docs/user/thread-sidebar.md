@@ -125,7 +125,15 @@ for custom configuration.
 
 ## Inspect agent work
 
-On web and desktop, use **Agents** to follow work delegated to subagents.
+Use **Agents** to follow work delegated to subagents. Active agents are listed
+first and idle ones below them; messaging a finished agent moves it back to the
+active list. A subagent that spawns its own subagents or background tasks shows
+them nested beneath it, and a family stays in the active list while any member
+is still working. Tasks the main agent runs in the background, such as long
+shell commands and monitors, appear in the same place with their own running
+and finished sections. Work that is still running always shows on the first
+page of a thread; older finished agents and tasks load with earlier history. On
+mobile, open the Agents screen from the thread.
 
 Expand a tool call in the conversation to see its full command and output.
 Summaries shorten shell wrappers and can still describe the latest call after it

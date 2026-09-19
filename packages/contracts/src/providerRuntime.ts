@@ -614,6 +614,14 @@ const taskAgentLinkageFields = {
    * belongs in the Agents surface, never the parent timeline.
    */
   timelineBypass: Schema.optional(Schema.Boolean),
+  /**
+   * True once the provider runs the task detached from the turn (Claude's
+   * `is_backgrounded` on task_started and task_updated patches; Antigravity
+   * commands promoted past their turn). Sticky and repeated on later rows so
+   * a settled task still reads as background work after its start row aged
+   * out. Foreground shells carry false or nothing.
+   */
+  isBackgrounded: Schema.optional(Schema.Boolean),
 } as const;
 
 export const TaskAgentLinkage = Schema.Struct(taskAgentLinkageFields);
@@ -663,7 +671,6 @@ const TaskUpdatedPayload = Schema.Struct({
   description: Schema.optional(TrimmedNonEmptyStringSchema),
   error: Schema.optional(TrimmedNonEmptyStringSchema),
   endedAt: Schema.optional(IsoDateTime),
-  isBackgrounded: Schema.optional(Schema.Boolean),
   ...taskAgentLinkageFields,
 });
 export type TaskUpdatedPayload = typeof TaskUpdatedPayload.Type;

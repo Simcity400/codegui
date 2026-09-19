@@ -382,6 +382,7 @@ export const makeAntigravityAdapter = Effect.fn("makeAntigravityAdapter")(functi
               taskType: "local_bash",
               toolUseId: id,
               status: "stopped",
+              isBackgrounded: true,
             },
           });
         }
@@ -964,6 +965,9 @@ export const makeAntigravityAdapter = Effect.fn("makeAntigravityAdapter")(functi
               toolUseId: id,
               description:
                 command.toolCall.command ?? command.toolCall.title ?? "Antigravity command",
+              // Promoted precisely because the command outlived its turn:
+              // that is a background task on the Agents surface.
+              isBackgrounded: true,
             },
           });
           context.commands.set(id, { ...command, promoted: true });

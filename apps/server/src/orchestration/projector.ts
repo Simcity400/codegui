@@ -251,6 +251,7 @@ function retainThreadMessagesAfterRevert(
   const retainedAssistantCount = messages.filter(
     (message) =>
       message.role === "assistant" &&
+      message.agentId === undefined &&
       !isImportedAgentSessionMessageId(message.id) &&
       retainedMessageIds.has(message.id),
   ).length;
@@ -260,6 +261,7 @@ function retainThreadMessagesAfterRevert(
       .filter(
         (message) =>
           message.role === "assistant" &&
+          message.agentId === undefined &&
           !retainedMessageIds.has(message.id) &&
           (message.turnId === null || retainedTurnIds.has(message.turnId)),
       )
@@ -775,6 +777,7 @@ export function projectEvent(
             role: payload.role,
             text: payload.text,
             ...(payload.attachments !== undefined ? { attachments: payload.attachments } : {}),
+            ...(payload.agentId !== undefined ? { agentId: payload.agentId } : {}),
             ...(payload.context !== undefined ? { context: payload.context } : {}),
             turnId: payload.turnId,
             streaming: payload.streaming,
@@ -802,6 +805,7 @@ export function projectEvent(
                     ...(message.attachments !== undefined
                       ? { attachments: message.attachments }
                       : {}),
+                    ...(message.agentId !== undefined ? { agentId: message.agentId } : {}),
                     ...(message.context !== undefined ? { context: message.context } : {}),
                   }
                 : entry,

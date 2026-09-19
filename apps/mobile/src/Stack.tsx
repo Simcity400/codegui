@@ -1,5 +1,9 @@
 import { ThreadSideChatsRouteScreen } from "./features/threads/ThreadSideChatsRouteScreen";
 import {
+  ThreadAgentsRouteScreen,
+  ThreadAgentTranscriptRouteScreen,
+} from "./features/agents/ThreadAgentsRouteScreen";
+import {
   createPathConfigForStaticNavigation,
   getPathFromState,
   NavigationState,
@@ -602,6 +606,16 @@ export const RootStack = createNativeStackNavigator({
       screen: ThreadSideChatsRouteScreen,
       linking: `${THREAD_LINKING_PREFIX}/side-chats`,
       options: { ...SOLID_HEADER_OPTIONS, title: "Side chats" },
+    }),
+    ThreadAgents: createNativeStackScreen({
+      screen: ThreadAgentsRouteScreen,
+      linking: `${THREAD_LINKING_PREFIX}/agents`,
+      options: { ...SOLID_HEADER_OPTIONS, title: "Agents" },
+    }),
+    ThreadAgentTranscript: createNativeStackScreen({
+      screen: ThreadAgentTranscriptRouteScreen,
+      linking: `${THREAD_LINKING_PREFIX}/agents/:agentId`,
+      options: { ...SOLID_HEADER_OPTIONS, title: "Agent transcript" },
     }),
     ThreadDevicePreview: createNativeStackScreen({
       screen: DevicePreviewRouteScreen,

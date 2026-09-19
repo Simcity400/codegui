@@ -142,3 +142,37 @@ describe("runtimeEventToActivities tool streaming persistence", () => {
     expect(payload.data).toEqual(streamingData);
   });
 });
+
+describe("runtimeEventToActivities task background flag", () => {
+  it("persists isBackgrounded on start, patch, and terminal rows", () => {
+    const taskId = RuntimeTaskId.make("shell-1");
+    const started = {
+      ...base,
+      type: "task.started",
+      eventId: EventId.make("evt-start"),
+      payload: { taskId, description: "Run gates", taskType: "local_bash", isBackgrounded: false },
+    } satisfies ProviderRuntimeEvent;
+    const backgrounded = {
+      ...base,
+      type: "task.updated",
+      eventId: EventId.make("evt-bg"),
+      payload: { taskId, taskType: "local_bash", isBackgrounded: true },
+    } satisfies ProviderRuntimeEvent;
+    const completed = {
+      ...base,
+      type: "task.completed",
+      eventId: EventId.make("evt-done"),
+      payload: { taskId, status: "completed", taskType: "local_bash", isBackgrounded: true },
+    } satisfies ProviderRuntimeEvent;
+
+    const payloads = [started, backgrounded, completed].map(
+      (event) => runtimeEventToActivities(event)[0]?.payload as Record<string, unknown>,
+    );
+    expect(payloads.map((payload) => payload.isBackgrounded)).toEqual([false, true, true]);
+    expect(payloads.map((payload) => payload.agentKind)).toEqual([
+      "background",
+      "background",
+      "background",
+    ]);
+  });
+});

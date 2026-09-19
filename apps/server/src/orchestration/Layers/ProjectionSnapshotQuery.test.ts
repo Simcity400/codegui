@@ -3158,6 +3158,119 @@ projectionSnapshotLayer("ProjectionSnapshotQuery windowed thread detail", (it) =
     }),
   );
 
+  it.effect("pins lifecycle rows of still-running tasks from outside the window", () =>
+    Effect.gen(function* () {
+      yield* seedFanOutThread();
+      const snapshotQuery = yield* ProjectionSnapshotQuery;
+      const sql = yield* SqlClient.SqlClient;
+
+      // Every task below was launched in turn-1, far outside a 2-turn window:
+      // a live background agent, a live backgrounded shell, an agent that
+      // settled through task.updated + task.completed, an idle (resumable)
+      // child, and an agent resumed after settling (its newest row is a
+      // fresh task.started).
+      yield* sql`
+        INSERT INTO projection_thread_activities (
+          activity_id, thread_id, turn_id, tone, kind, summary, payload_json, sequence, created_at
+        )
+        VALUES
+          ('live-agent-start', 'thread-w', 'turn-1', 'info', 'task.started', 'started',
+            '{"taskId":"live-agent","taskType":"local_agent","agentKind":"agent","isBackgrounded":true}',
+            1, '2026-03-01T00:00:01.000Z'),
+          ('task-progress:thread-w:live-agent', 'thread-w', 'turn-1', 'info', 'task.progress',
+            'working', '{"taskId":"live-agent","taskType":"local_agent","agentKind":"agent"}',
+            2, '2026-03-01T00:00:02.000Z'),
+          ('live-shell-start', 'thread-w', 'turn-1', 'info', 'task.started', 'started',
+            '{"taskId":"live-shell","taskType":"local_bash","agentKind":"background","isBackgrounded":true}',
+            3, '2026-03-01T00:00:03.000Z'),
+          ('done-agent-start', 'thread-w', 'turn-1', 'info', 'task.started', 'started',
+            '{"taskId":"done-agent","taskType":"local_agent","agentKind":"agent"}',
+            4, '2026-03-01T00:00:04.000Z'),
+          ('done-agent-updated', 'thread-w', 'turn-1', 'info', 'task.updated', 'completed',
+            '{"taskId":"done-agent","status":"completed","agentKind":"agent"}',
+            5, '2026-03-01T00:00:05.000Z'),
+          ('done-agent-completed', 'thread-w', 'turn-1', 'info', 'task.completed', 'completed',
+            '{"taskId":"done-agent","status":"completed","agentKind":"agent"}',
+            6, '2026-03-01T00:00:06.000Z'),
+          ('idle-child-start', 'thread-w', 'turn-1', 'info', 'task.started', 'started',
+            '{"taskId":"idle-child","agentKind":"agent"}',
+            7, '2026-03-01T00:00:07.000Z'),
+          ('idle-child-idle', 'thread-w', 'turn-1', 'info', 'task.updated', 'idle',
+            '{"taskId":"idle-child","status":"idle","agentKind":"agent"}',
+            8, '2026-03-01T00:00:08.000Z'),
+          ('resumed-start-1', 'thread-w', 'turn-1', 'info', 'task.started', 'started',
+            '{"taskId":"resumed","taskType":"local_agent","agentKind":"agent","toolUseId":"toolu_1"}',
+            9, '2026-03-01T00:00:09.000Z'),
+          ('resumed-completed-1', 'thread-w', 'turn-1', 'info', 'task.completed', 'completed',
+            '{"taskId":"resumed","status":"completed","agentKind":"agent","toolUseId":"toolu_1"}',
+            10, '2026-03-01T00:00:10.000Z'),
+          ('resumed-start-2', 'thread-w', 'turn-1', 'info', 'task.started', 'started',
+            '{"taskId":"resumed","taskType":"local_agent","agentKind":"agent","toolUseId":"toolu_2"}',
+            11, '2026-03-01T00:00:11.000Z'),
+          ('failed-late-start', 'thread-w', 'turn-1', 'info', 'task.started', 'started',
+            '{"taskId":"failed-late","taskType":"local_agent","agentKind":"agent"}',
+            12, '2026-03-01T00:00:12.000Z'),
+          ('failed-late-failed', 'thread-w', 'turn-1', 'info', 'task.updated', 'failed',
+            '{"taskId":"failed-late","status":"failed","agentKind":"agent"}',
+            13, '2026-03-01T00:00:13.000Z'),
+          ('task-usage:thread-w:failed-late', 'thread-w', 'turn-1', 'info', 'task.progress',
+            'usage', '{"taskId":"failed-late","agentKind":"agent","usageSnapshot":true}',
+            14, '2026-03-01T00:00:14.000Z'),
+          ('workflow-start', 'thread-w', 'turn-1', 'info', 'task.started', 'started',
+            '{"taskId":"wf-1","taskType":"local_workflow","agentKind":"agent"}',
+            15, '2026-03-01T00:00:15.000Z'),
+          ('task-progress:thread-w:wf-1:wf:0', 'thread-w', 'turn-1', 'info', 'task.progress',
+            'member', '{"taskId":"wf-1:wf:0","status":"running","parentAgentId":"wf-1","agentKind":"agent"}',
+            16, '2026-03-01T00:00:16.000Z')
+      `;
+      yield* sql`
+        INSERT INTO projection_thread_sessions (thread_id, status, updated_at)
+        VALUES ('thread-w', 'running', '2026-03-01T00:04:00.000Z')
+      `;
+
+      const window = yield* snapshotQuery.getThreadDetailSnapshot(threadW, { turnLimit: 2 });
+      assert.equal(window._tag, "Some");
+      if (window._tag === "Some") {
+        const ids = new Set(window.value.thread.activities.map((activity) => activity.id));
+        // Live work rides on the first page regardless of its turn.
+        assert.equal(ids.has(asEventId("live-agent-start")), true);
+        assert.equal(ids.has(asEventId("task-progress:thread-w:live-agent")), true);
+        assert.equal(ids.has(asEventId("live-shell-start")), true);
+        // A resumed task pins its whole history so the client fold can count
+        // the activation, not just the newest start row.
+        assert.equal(ids.has(asEventId("resumed-start-1")), true);
+        assert.equal(ids.has(asEventId("resumed-completed-1")), true);
+        assert.equal(ids.has(asEventId("resumed-start-2")), true);
+        // Workflow members have progress-only lifecycles: they ride with their
+        // live coordinator.
+        assert.equal(ids.has(asEventId("workflow-start")), true);
+        assert.equal(ids.has(asEventId("task-progress:thread-w:wf-1:wf:0")), true);
+        // Settled and idle tasks load with their own page.
+        assert.equal(ids.has(asEventId("done-agent-start")), false);
+        assert.equal(ids.has(asEventId("done-agent-completed")), false);
+        assert.equal(ids.has(asEventId("idle-child-start")), false);
+        assert.equal(ids.has(asEventId("turn-1-activity")), false);
+        // A status-less usage upsert landing after the terminal row must not
+        // revive the task (measured on real threads: it sorted last and pinned
+        // hundreds of dead tasks).
+        assert.equal(ids.has(asEventId("failed-late-start")), false);
+        assert.equal(ids.has(asEventId("task-usage:thread-w:failed-late")), false);
+      }
+
+      // A dead session has nothing left to finish: no task scan, no pins.
+      yield* sql`UPDATE projection_thread_sessions SET status = 'stopped' WHERE thread_id = 'thread-w'`;
+      const stoppedWindow = yield* snapshotQuery.getThreadDetailSnapshot(threadW, {
+        turnLimit: 2,
+      });
+      assert.equal(stoppedWindow._tag, "Some");
+      if (stoppedWindow._tag === "Some") {
+        const ids = new Set(stoppedWindow.value.thread.activities.map((activity) => activity.id));
+        assert.equal(ids.has(asEventId("live-agent-start")), false);
+        assert.equal(ids.has(asEventId("live-shell-start")), false);
+      }
+    }),
+  );
+
   it.effect("a thread with no turns returns its content unwindowed on the first page", () =>
     Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;

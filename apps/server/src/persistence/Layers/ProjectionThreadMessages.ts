@@ -5,7 +5,11 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import * as Struct from "effect/Struct";
-import { ChatAttachment, OrchestrationMessageContext } from "@t3tools/contracts";
+import {
+  ChatAttachment,
+  TrimmedNonEmptyString,
+  OrchestrationMessageContext,
+} from "@t3tools/contracts";
 
 import { toPersistenceSqlError } from "../Errors.ts";
 import {
@@ -23,6 +27,7 @@ const ProjectionThreadMessageDbRowSchema = ProjectionThreadMessage.mapFields(
   Struct.assign({
     isStreaming: Schema.Number,
     attachments: Schema.NullOr(Schema.fromJsonString(Schema.Array(ChatAttachment))),
+    agentId: Schema.NullOr(TrimmedNonEmptyString),
     context: Schema.NullOr(Schema.fromJsonString(OrchestrationMessageContext)),
   }),
 );
@@ -41,6 +46,7 @@ function toProjectionThreadMessage(
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
     ...(row.attachments !== null ? { attachments: row.attachments } : {}),
+    ...(row.agentId !== null ? { agentId: row.agentId } : {}),
     ...(row.context !== null ? { context: row.context } : {}),
   };
 }
@@ -62,6 +68,7 @@ const makeProjectionThreadMessageRepository = Effect.gen(function* () {
           role,
           text,
           attachments_json,
+          agent_id,
           context_json,
           is_streaming,
           created_at,
@@ -81,6 +88,7 @@ const makeProjectionThreadMessageRepository = Effect.gen(function* () {
               WHERE message_id = ${row.messageId}
             )
           ),
+          ${row.agentId ?? null},
           COALESCE(
             ${nextContextJson},
             (
@@ -103,6 +111,7 @@ const makeProjectionThreadMessageRepository = Effect.gen(function* () {
             excluded.attachments_json,
             projection_thread_messages.attachments_json
           ),
+          agent_id = COALESCE(excluded.agent_id, projection_thread_messages.agent_id),
           context_json = COALESCE(
             excluded.context_json,
             projection_thread_messages.context_json
@@ -128,6 +137,7 @@ const makeProjectionThreadMessageRepository = Effect.gen(function* () {
           role,
           text,
           attachments_json,
+          agent_id,
           context_json,
           is_streaming,
           created_at,
@@ -140,6 +150,7 @@ const makeProjectionThreadMessageRepository = Effect.gen(function* () {
           ${row.role},
           ${row.text},
           ${nextAttachmentsJson},
+          ${row.agentId ?? null},
           ${nextContextJson},
           1,
           ${row.createdAt},
@@ -155,6 +166,7 @@ const makeProjectionThreadMessageRepository = Effect.gen(function* () {
             excluded.attachments_json,
             projection_thread_messages.attachments_json
           ),
+          agent_id = COALESCE(excluded.agent_id, projection_thread_messages.agent_id),
           context_json = COALESCE(
             excluded.context_json,
             projection_thread_messages.context_json
@@ -177,6 +189,7 @@ const makeProjectionThreadMessageRepository = Effect.gen(function* () {
           role,
           text,
           attachments_json AS "attachments",
+          agent_id AS "agentId",
           context_json AS "context",
           is_streaming AS "isStreaming",
           created_at AS "createdAt",
@@ -198,6 +211,9 @@ const makeProjectionThreadMessageRepository = Effect.gen(function* () {
           WHERE thread_id = ${threadId}
             AND turn_id = ${turnId}
             AND role = 'assistant'
+            -- Parent-owned rows only: a subagent's message (agent_id set) never counts
+            -- as the thread's own assistant output for the turn.
+            AND agent_id IS NULL
             AND (${streamingOnly ? 1 : 0} = 0 OR is_streaming = 1)
           LIMIT 1
         ) AS "exists"
@@ -216,6 +232,7 @@ const makeProjectionThreadMessageRepository = Effect.gen(function* () {
           role,
           text,
           attachments_json AS "attachments",
+          agent_id AS "agentId",
           context_json AS "context",
           is_streaming AS "isStreaming",
           created_at AS "createdAt",

@@ -389,6 +389,7 @@ export function applyThreadDetailEvent(
         id: event.payload.messageId,
         role: event.payload.role,
         text: event.payload.text,
+        ...(event.payload.agentId !== undefined ? { agentId: event.payload.agentId } : {}),
         ...(event.payload.attachments !== undefined
           ? { attachments: event.payload.attachments }
           : {}),
@@ -399,10 +400,12 @@ export function applyThreadDetailEvent(
         updatedAt: event.payload.updatedAt,
       };
 
+      let isParentMessage = message.agentId === undefined;
       let found = false;
       const messages = thread.messages.map((entry) => {
         if (entry.id !== message.id) return entry;
         found = true;
+        isParentMessage = (message.agentId ?? entry.agentId) === undefined;
         return {
           ...entry,
           text: message.streaming
@@ -411,6 +414,7 @@ export function applyThreadDetailEvent(
               ? message.text
               : entry.text,
           streaming: message.streaming,
+          ...(message.agentId !== undefined ? { agentId: message.agentId } : {}),
           ...(message.turnId !== undefined ? { turnId: message.turnId } : {}),
           ...(message.streaming ? {} : { updatedAt: message.updatedAt }),
           ...(message.attachments !== undefined ? { attachments: message.attachments } : {}),
@@ -432,6 +436,7 @@ export function applyThreadDetailEvent(
       const latestTurn = reuseLatestTurn(
         thread.latestTurn,
         event.payload.role === "assistant" &&
+          isParentMessage &&
           event.payload.turnId !== null &&
           (thread.latestTurn === null || thread.latestTurn.turnId === event.payload.turnId)
           ? {
@@ -464,7 +469,7 @@ export function applyThreadDetailEvent(
       // Rebind checkpoint assistant message IDs for assistant messages. The
       // helper hands back the same array when the entry is already bound.
       const checkpoints =
-        event.payload.role === "assistant" && event.payload.turnId !== null
+        event.payload.role === "assistant" && isParentMessage && event.payload.turnId !== null
           ? rebindCheckpointAssistantMessage(
               thread.checkpoints,
               event.payload.turnId,
@@ -845,6 +850,7 @@ function retainMessagesAfterRevert(
     const retainedCount = messages.filter(
       (message) =>
         message.role === role &&
+        message.agentId === undefined &&
         !isImportedAgentSessionMessageId(message.id) &&
         retainedMessageIds.has(message.id),
     ).length;

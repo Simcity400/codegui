@@ -86,6 +86,15 @@ export const ensureForkColumns = Effect.fn("ensureForkColumns")(function* () {
   const sql = yield* SqlClient.SqlClient;
   yield* sql.withTransaction(
     Effect.gen(function* () {
+      const messageColumns = yield* sql<{
+        name: string;
+      }>`PRAGMA table_info(projection_thread_messages)`;
+      if (
+        messageColumns.length > 0 &&
+        !messageColumns.some((column) => column.name === "agent_id")
+      ) {
+        yield* sql`ALTER TABLE projection_thread_messages ADD COLUMN agent_id TEXT`;
+      }
       const threadColumns = yield* sql<{ name: string }>`PRAGMA table_info(projection_threads)`;
       if (threadColumns.length > 0) {
         if (!threadColumns.some((column) => column.name === "forked_from_thread_id")) {
@@ -94,6 +103,18 @@ export const ensureForkColumns = Effect.fn("ensureForkColumns")(function* () {
         if (!threadColumns.some((column) => column.name === "side_chat_promoted_at")) {
           yield* sql`ALTER TABLE projection_threads ADD COLUMN side_chat_promoted_at TEXT`;
         }
+      }
+      // Thread-detail reads pin the lifecycle rows of still-running tasks
+      // onto every page (ProjectionSnapshotQuery). Narrowing on kind keeps
+      // that scan to task rows; without it a large live thread pays a full
+      // per-thread activity scan on every read. Lives here, not in a numbered
+      // migration: upstream already owns the next ids on forked databases.
+      const activityColumns = yield* sql<{
+        name: string;
+      }>`PRAGMA table_info(projection_thread_activities)`;
+      if (activityColumns.length > 0) {
+        yield* sql`CREATE INDEX IF NOT EXISTS idx_projection_thread_activities_thread_kind
+          ON projection_thread_activities (thread_id, kind)`;
       }
     }),
   );

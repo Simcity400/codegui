@@ -229,7 +229,11 @@ import { WizardPopup } from "./ui/wizard";
 import {
   deriveAgentPanelModel,
   foldSubagentActivities,
+  foldThreadTasks,
 } from "@t3tools/client-runtime/state/subagentRuntime";
+import { isSubagentSessionLive } from "@t3tools/client-runtime/state/subagentPresentation";
+import { ScopedAgentTranscript } from "./chat/AgentTranscript";
+import { isAgentMessage } from "@t3tools/client-runtime/state/agent-transcripts";
 import { BranchToolbar, type BranchToolbarHandle } from "./BranchToolbar";
 import { resolveShortcutCommand, shortcutLabelForCommand } from "../keybindings";
 import ThreadTerminalDrawer from "./ThreadTerminalDrawer";
@@ -2958,12 +2962,10 @@ export default function ChatView(props: ChatViewProps) {
   // Agents surface, live strip, and workflow cards. v2Projection is null
   // until orchestration-v2 lands (source precedence lives in the derive).
   // sessionLive derives interruption for agents orphaned by session death.
-  const agentSessionLive = phase !== "disconnected";
+  const agentSessionLive = isSubagentSessionLive(activeThread?.session);
   const agentPanelModel = useMemo(
     () =>
-      deriveAgentPanelModel({
-        agents: foldSubagentActivities(threadActivities, { sessionLive: agentSessionLive }),
-      }),
+      deriveAgentPanelModel(foldThreadTasks(threadActivities, { sessionLive: agentSessionLive })),
     [agentSessionLive, threadActivities],
   );
   const { approvals: pendingApprovals, userInputs: pendingUserInputs } = useMemo(
@@ -3364,7 +3366,10 @@ export default function ChatView(props: ChatViewProps) {
       return next;
     });
   }, []);
-  const serverMessages = activeThread?.messages;
+  const serverMessages = useMemo(
+    () => activeThread?.messages.filter((message) => !isAgentMessage(message)),
+    [activeThread?.messages],
+  );
   const [projectServerMessagePreviews] = useState(createMessageAttachmentPreviewProjector);
   const [projectHandoffMessagePreviews] = useState(createMessageAttachmentPreviewProjector);
   const downloadFileAttachment = useCallback(
@@ -9799,6 +9804,32 @@ export default function ChatView(props: ChatViewProps) {
         model={agentPanelModel}
         environmentId={activeThreadRef?.environmentId ?? null}
         threadId={activeThreadRef?.threadId ?? null}
+        loadEarlier={loadEarlierTurns}
+        renderTranscript={(agent, { openRoster }) => (
+          <ScopedAgentTranscript
+            key={agent.id}
+            agent={agent}
+            environmentId={activeThreadRef.environmentId}
+            threadId={activeThreadRef.threadId}
+            agentPanelModel={agentPanelModel}
+            onOpenAgents={openRoster}
+            routeThreadKey={routeThreadKey}
+            activeThreadEnvironmentId={activeThreadRef.environmentId}
+            markdownCwd={gitCwd ?? undefined}
+            resolvedTheme={resolvedTheme}
+            timestampFormat={timestampFormat}
+            workspaceRoot={activeWorkspaceRoot ?? undefined}
+            onUseArtifactTemplate={useArtifactTemplate}
+            skills={
+              activeProviderStatus
+                ? resolveProviderSkillsForCwd(activeProviderStatus, gitCwd)
+                : EMPTY_PROVIDER_SKILLS
+            }
+            onImageExpand={onExpandTimelineImage}
+            onFileOpen={openFileAttachment}
+            onFileDownload={downloadFileAttachment}
+          />
+        )}
       />
     ) : renderedRightPanelSurface?.kind === "device" ? (
       <Suspense fallback={null}>

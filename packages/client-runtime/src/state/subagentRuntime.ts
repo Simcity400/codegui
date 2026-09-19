@@ -18,6 +18,7 @@
  * metadata).
  */
 import type { OrchestrationThreadActivity } from "@t3tools/contracts";
+import { INERT_TASK_TYPES } from "@t3tools/contracts";
 
 export type RuntimeSubagentStatus =
   | "pending"
@@ -58,7 +59,7 @@ export interface SubagentRunHandles {
 
 export interface RuntimeSubagent {
   readonly id: string;
-  readonly kind: "subagent" | "subagent_batch" | "workflow" | "workflow_agent";
+  readonly kind: "subagent" | "subagent_batch" | "workflow" | "workflow_agent" | "background_task";
   readonly title: string;
   readonly role: string | null;
   readonly model: string | null;
@@ -80,6 +81,13 @@ export interface RuntimeSubagent {
   readonly phases: ReadonlyArray<SubagentWorkflowPhase>;
   readonly runHandles: SubagentRunHandles | null;
   readonly recentActivity: ReadonlyArray<SubagentActivityEntry>;
+  /** Provider task type when known (local_agent, local_bash, monitor, …). */
+  readonly taskType: string | null;
+  /** Subagent that launched this task, when it ran inside one. */
+  readonly owningAgentId: string | null;
+  /** Tool use that launched the CURRENT activation; a new id on a start row
+   * after the run settled is how a same-id resume is told from a replay. */
+  readonly toolUseId: string | null;
   /** First retained observation, used as the roster's stable display order. */
   readonly firstSeenAt: string;
   readonly startedAt: string | null;
@@ -119,6 +127,9 @@ const ROSTER_LIMIT = 100;
 export function isBackgroundTaskActivity(payload: Record<string, unknown>): boolean {
   return payload.agentKind !== "agent";
 }
+
+/** Watch loops are background work from the start, even without a backgrounded flag. */
+const WATCH_LOOP_TASK_TYPES: ReadonlySet<string> = new Set(["monitor", "monitor_mcp"]);
 
 function bounded(value: string): string {
   return value.length <= SUMMARY_CHAR_LIMIT ? value : `${value.slice(0, SUMMARY_CHAR_LIMIT - 1)}…`;
@@ -249,10 +260,15 @@ interface MutableAgent {
   phases: ReadonlyArray<SubagentWorkflowPhase>;
   runHandles: SubagentRunHandles | null;
   recentActivity: ReadonlyArray<SubagentActivityEntry>;
+  taskType: string | null;
+  owningAgentId: string | null;
+  toolUseId: string | null;
   firstSeenAt: string;
   startedAt: string | null;
   completedAt: string | null;
   updatedAt: string;
+  /** Sticky: seen isBackgrounded=true on any row (background roster only). */
+  backgrounded: boolean;
 }
 
 function kindFromPayload(
@@ -306,10 +322,14 @@ function getOrCreate(
     phases: [],
     runHandles: null,
     recentActivity: [],
+    taskType: asString(payload.taskType) ?? null,
+    owningAgentId: asString(payload.agentId) ?? null,
+    toolUseId: null,
     firstSeenAt: at,
     startedAt: null,
     completedAt: null,
     updatedAt: at,
+    backgrounded: false,
   };
   agents.set(id, created);
   return created;
@@ -333,7 +353,16 @@ function fillMetadata(agent: MutableAgent, payload: Record<string, unknown>): vo
   }
   const workflowName = asString(payload.workflowName);
   if (workflowName) agent.workflowName = workflowName;
-  if (asString(payload.taskType) === "local_workflow") agent.kind = "workflow";
+  const taskType = asString(payload.taskType);
+  if (taskType) agent.taskType = taskType;
+  if (taskType === "local_workflow") agent.kind = "workflow";
+  const owningAgentId = asString(payload.agentId);
+  if (owningAgentId) agent.owningAgentId = owningAgentId;
+  if (payload.isBackgrounded === true) agent.backgrounded = true;
+  // Progress and terminal rows repeat the launching tool use, so a task first
+  // seen mid-run still learns its activation identity.
+  const toolUseId = asString(payload.toolUseId);
+  if (toolUseId && agent.toolUseId === null) agent.toolUseId = toolUseId;
   const agentIndex = asCount(payload.agentIndex);
   if (agentIndex !== undefined) agent.agentIndex = agentIndex;
   const phaseIndex = asCount(payload.phaseIndex);
@@ -449,22 +478,70 @@ function asRuntimeStatus(value: unknown): RuntimeSubagentStatus | undefined {
     : undefined;
 }
 
+export interface ThreadTaskFold {
+  readonly agents: ReadonlyArray<RuntimeSubagent>;
+  /**
+   * Backgrounded shells and watch loops (never agents), settled or live.
+   * Foreground shells that finished inside their turn are ordinary tool
+   * calls and stay out: only rows that carried isBackgrounded=true (or a
+   * watch-loop taskType) qualify, and plan-mode bookkeeping never does.
+   */
+  readonly backgroundTasks: ReadonlyArray<RuntimeSubagent>;
+}
+
+const EMPTY_TASK_FOLD: ThreadTaskFold = { agents: [], backgroundTasks: [] };
+
+function stripInternal(agent: MutableAgent): RuntimeSubagent {
+  const { backgrounded: _backgrounded, ...rest } = agent;
+  return rest;
+}
+
 /**
- * Folds a thread's persisted activities into subagent state. Tolerant by
- * construction: malformed rows are skipped individually; unknown kinds are
- * ignored. Pure — memoize by activity-list identity at the atom layer.
+ * Folds a thread's persisted activities into subagent state plus the
+ * background-task roster in one pass. Tolerant by construction: malformed
+ * rows are skipped individually; unknown kinds are ignored. Pure — memoize
+ * by activity-list identity at the atom layer.
  *
- * sessionLive=false derives interruption: background tasks die with their
- * provider session, so agents whose terminal rows were lost (server
- * restart, crash) must not read as running forever (review finding: a dead
- * session left a panel full of "Working" agents while the sidebar showed
+ * Roster membership reads the server's agentKind stamp exactly once per
+ * taskId and is sticky afterwards (terminal rows often carry only
+ * taskId+status). Rows without a stamp — legacy threads, pre-stamp servers —
+ * belong to neither roster: they render in the ordinary work log, exactly as
+ * they did before the Agents surface existed.
+ *
+ * sessionLive=false derives interruption: background work dies with its
+ * provider session, so tasks whose terminal rows were lost (server restart,
+ * crash) must not read as running forever (review finding: a dead session
+ * left a panel full of "Working" agents while the sidebar showed
  * nothing). Idle is preserved — a resumable Codex child stays resumable.
  */
-export function foldSubagentActivities(
+export function foldThreadTasks(
   activities: ReadonlyArray<OrchestrationThreadActivity>,
   options?: { readonly sessionLive?: boolean },
-): ReadonlyArray<RuntimeSubagent> {
+): ThreadTaskFold {
   const agents = new Map<string, MutableAgent>();
+  const backgroundTasks = new Map<string, MutableAgent>();
+
+  const rosterFor = (
+    taskId: string,
+    payload: Record<string, unknown>,
+  ): Map<string, MutableAgent> | undefined => {
+    if (agents.has(taskId)) return agents;
+    if (backgroundTasks.has(taskId)) return backgroundTasks;
+    if (payload.agentKind === "agent") return agents;
+    if (payload.agentKind === "background") return backgroundTasks;
+    return undefined;
+  };
+  const getOrCreateIn = (
+    roster: Map<string, MutableAgent>,
+    taskId: string,
+    payload: Record<string, unknown>,
+    at: string,
+  ): MutableAgent => {
+    const existed = roster.has(taskId);
+    const agent = getOrCreate(roster, taskId, payload, at);
+    if (!existed && roster === backgroundTasks) agent.kind = "background_task";
+    return agent;
+  };
 
   for (const activity of activities) {
     if (typeof activity.payload !== "object" || activity.payload === null) {
@@ -477,26 +554,33 @@ export function foldSubagentActivities(
       case "task.started": {
         const taskId = asString(payload.taskId);
         if (!taskId) break;
-        // Only real agents join the roster. Shells, monitors, and plan-mode
-        // tasks are background work — they render in the ordinary work log,
-        // not the Agents surface (a "Run 12s stall" shell is not a subagent).
-        if (isBackgroundTaskActivity(payload)) break;
-        const agent = getOrCreate(agents, taskId, payload, at);
+        const roster = rosterFor(taskId, payload);
+        if (!roster) break;
+        const agent = getOrCreateIn(roster, taskId, payload, at);
+        const previousToolUseId = agent.toolUseId;
         fillMetadata(agent, payload);
-        // Order-robustness: a start row arriving after a terminal state is a
-        // late/out-of-order delivery and only fills metadata — it must not
-        // reopen the run. Reactivation comes exclusively from explicit
-        // status transitions (task.updated / progress status). Guard on the
-        // status itself, not activationCount: a task first seen via a
-        // terminal task.updated has zero activations but is still settled
-        // (review finding: a late start reopened a failed child).
+        const toolUseId = asString(payload.toolUseId);
         if (agent.activationCount === 0 && !isTerminalSubagentStatus(agent.status)) {
           agent.activationCount = 1;
           agent.startedAt = agent.startedAt ?? at;
           agent.status = "running";
-        } else if (agent.status === "idle") {
+        } else if (
+          agent.status === "idle" ||
+          // A start row after the run settled is a resume of the same
+          // identity ONLY when it names a new launching tool use: Claude
+          // re-emits task_started for a SendMessage to a settled background
+          // agent under the SendMessage tool use. A start that repeats the
+          // settled activation's tool use, or carries none (Codex re-registers
+          // children from thread/started and subAgentActivity without
+          // attribution, and resumes them through task.updated running), is a
+          // replay and must not reopen a failed child (review finding).
+          (isTerminalSubagentStatus(agent.status) &&
+            toolUseId !== undefined &&
+            toolUseId !== previousToolUseId)
+        ) {
           applyStatus(agent, "running", at);
         }
+        if (toolUseId) agent.toolUseId = toolUseId;
         const detail = asString(payload.detail);
         if (detail && agent.title === agent.id) agent.title = detail;
         agent.updatedAt = at;
@@ -505,12 +589,10 @@ export function foldSubagentActivities(
       case "task.progress": {
         const taskId = asString(payload.taskId);
         if (!taskId) break;
-        // Membership is sticky per taskId: rows after the first (terminal
-        // rows often carry only taskId+status, no marker fields) inherit the
-        // first row's classification instead of being re-judged.
-        const existed = agents.has(taskId);
-        if (!existed && isBackgroundTaskActivity(payload)) break;
-        const agent = getOrCreate(agents, taskId, payload, at);
+        const roster = rosterFor(taskId, payload);
+        if (!roster) break;
+        const existed = roster.has(taskId);
+        const agent = getOrCreateIn(roster, taskId, payload, at);
         fillMetadata(agent, payload);
         if (agent.activationCount === 0) agent.activationCount = 1;
         const explicitStatus = asRuntimeStatus(payload.status);
@@ -544,11 +626,9 @@ export function foldSubagentActivities(
       case "task.updated": {
         const taskId = asString(payload.taskId);
         if (!taskId) break;
-        // Membership is sticky per taskId: rows after the first (terminal
-        // rows often carry only taskId+status, no marker fields) inherit the
-        // first row's classification instead of being re-judged.
-        if (!agents.has(taskId) && isBackgroundTaskActivity(payload)) break;
-        const agent = getOrCreate(agents, taskId, payload, at);
+        const roster = rosterFor(taskId, payload);
+        if (!roster) break;
+        const agent = getOrCreateIn(roster, taskId, payload, at);
         fillMetadata(agent, payload);
         const detail = asString(payload.detail);
         if (detail) agent.progress = bounded(detail);
@@ -574,11 +654,9 @@ export function foldSubagentActivities(
       case "task.completed": {
         const taskId = asString(payload.taskId);
         if (!taskId) break;
-        // Membership is sticky per taskId: rows after the first (terminal
-        // rows often carry only taskId+status, no marker fields) inherit the
-        // first row's classification instead of being re-judged.
-        if (!agents.has(taskId) && isBackgroundTaskActivity(payload)) break;
-        const agent = getOrCreate(agents, taskId, payload, at);
+        const roster = rosterFor(taskId, payload);
+        if (!roster) break;
+        const agent = getOrCreateIn(roster, taskId, payload, at);
         fillMetadata(agent, payload);
         if (agent.activationCount === 0) agent.activationCount = 1;
         // Already-terminal: status and timestamps are frozen (first write
@@ -654,30 +732,53 @@ export function foldSubagentActivities(
     }
   }
 
-  // Session death orphans every live agent: no process remains to finish
+  // Session death orphans every live task: no process remains to finish
   // them. Mirrors the server-side liveness registry clearing on
   // session.exited, so panel and sidebar can never disagree.
   if (options?.sessionLive === false) {
-    for (const agent of agents.values()) {
-      if (isActiveSubagentStatus(agent.status)) {
-        agent.status = "interrupted";
-        agent.completedAt = agent.completedAt ?? agent.updatedAt;
+    for (const roster of [agents, backgroundTasks]) {
+      for (const agent of roster.values()) {
+        if (isActiveSubagentStatus(agent.status)) {
+          agent.status = "interrupted";
+          agent.completedAt = agent.completedAt ?? agent.updatedAt;
+        }
       }
     }
   }
 
-  let roster = Array.from(agents.values());
-  if (roster.length > ROSTER_LIMIT) {
+  const boundedRoster = (roster: ReadonlyArray<MutableAgent>): ReadonlyArray<MutableAgent> => {
+    if (roster.length <= ROSTER_LIMIT) {
+      return roster;
+    }
     // Prefer live, then waiting/idle, then newest settled.
     const rank = (agent: MutableAgent): number =>
       isActiveSubagentStatus(agent.status) ? 0 : agent.status === "idle" ? 1 : 2;
-    roster = roster
+    return roster
       .slice()
       .sort((a, b) => rank(a) - rank(b) || b.updatedAt.localeCompare(a.updatedAt))
       .slice(0, ROSTER_LIMIT);
-  }
+  };
 
-  return roster.map((agent) => ({ ...agent }));
+  const listedBackgroundTasks = Array.from(backgroundTasks.values()).filter(
+    (task) =>
+      (task.backgrounded || (task.taskType !== null && WATCH_LOOP_TASK_TYPES.has(task.taskType))) &&
+      !(task.taskType !== null && INERT_TASK_TYPES.has(task.taskType)),
+  );
+  if (agents.size === 0 && listedBackgroundTasks.length === 0) {
+    return EMPTY_TASK_FOLD;
+  }
+  return {
+    agents: boundedRoster(Array.from(agents.values())).map(stripInternal),
+    backgroundTasks: boundedRoster(listedBackgroundTasks).map(stripInternal),
+  };
+}
+
+/** The agent roster alone; see foldThreadTasks for the shared pass. */
+export function foldSubagentActivities(
+  activities: ReadonlyArray<OrchestrationThreadActivity>,
+  options?: { readonly sessionLive?: boolean },
+): ReadonlyArray<RuntimeSubagent> {
+  return foldThreadTasks(activities, options).agents;
 }
 
 export interface AgentPanelWorkflowGroup {
@@ -698,6 +799,9 @@ export interface AgentPanelWorkflowGroup {
 export interface AgentPanelModel {
   readonly workflows: ReadonlyArray<AgentPanelWorkflowGroup>;
   readonly directAgents: ReadonlyArray<RuntimeSubagent>;
+  /** Backgrounded shells and monitors; never part of the agent counts below. */
+  readonly backgroundTasks: ReadonlyArray<RuntimeSubagent>;
+  readonly backgroundActiveCount: number;
   readonly runningCount: number;
   readonly waitingCount: number;
   readonly idleCount: number;
@@ -710,6 +814,8 @@ export interface AgentPanelModel {
 const EMPTY_PANEL_MODEL: AgentPanelModel = {
   workflows: [],
   directAgents: [],
+  backgroundTasks: [],
+  backgroundActiveCount: 0,
   runningCount: 0,
   waitingCount: 0,
   idleCount: 0,
@@ -731,13 +837,15 @@ export function emptyAgentPanelModel(): AgentPanelModel {
  */
 export function deriveAgentPanelModel({
   agents,
+  backgroundTasks = [],
   v2Projection,
 }: {
   readonly agents: ReadonlyArray<RuntimeSubagent>;
+  readonly backgroundTasks?: ReadonlyArray<RuntimeSubagent>;
   readonly v2Projection?: ReadonlyArray<RuntimeSubagent> | null;
 }): AgentPanelModel {
   const source = v2Projection ?? agents;
-  if (source.length === 0) {
+  if (source.length === 0 && backgroundTasks.length === 0) {
     return EMPTY_PANEL_MODEL;
   }
 
@@ -851,6 +959,11 @@ export function deriveAgentPanelModel({
     directAgents: direct
       .slice()
       .sort((a, b) => a.firstSeenAt.localeCompare(b.firstSeenAt) || a.id.localeCompare(b.id)),
+    backgroundTasks: backgroundTasks
+      .slice()
+      .sort((a, b) => a.firstSeenAt.localeCompare(b.firstSeenAt) || a.id.localeCompare(b.id)),
+    backgroundActiveCount: backgroundTasks.filter((task) => isActiveSubagentStatus(task.status))
+      .length,
     runningCount,
     waitingCount,
     idleCount,

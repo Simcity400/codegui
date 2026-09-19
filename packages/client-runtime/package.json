@@ -103,6 +103,10 @@
       "types": "./src/relay/index.ts",
       "default": "./src/relay/index.ts"
     },
+    "./state/agent-transcripts": {
+      "types": "./src/state/agentTranscripts.ts",
+      "default": "./src/state/agentTranscripts.ts"
+    },
     "./state/auth": {
       "types": "./src/state/auth.ts",
       "default": "./src/state/auth.ts"
@@ -226,6 +230,10 @@
     "./state/subagentRuntime": {
       "types": "./src/state/subagentRuntime.ts",
       "default": "./src/state/subagentRuntime.ts"
+    },
+    "./state/subagentPresentation": {
+      "types": "./src/state/subagentPresentation.ts",
+      "default": "./src/state/subagentPresentation.ts"
     },
     "./state/thread-sort": {
       "types": "./src/state/threadSort.ts",
