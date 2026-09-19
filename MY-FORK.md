@@ -34,8 +34,17 @@ and valid iOS preview signing credentials in EAS.
 
 Changes publish to the `preview` branch. The pipeline compares native fingerprints:
 compatible changes ship over the air; native changes require installing the new
-preview build from EAS. The **Personal iPhone Preview** workflow can also be run
-manually to retry a failed deployment.
+preview build from EAS. Native builds wait at least three days between attempts
+and stop at 12 iPhone build attempts in a rolling 31-day window. The count includes
+all profiles and outcomes in this Expo project, reserving three of the free plan's
+15 slots. Builds in other Expo projects are outside this guard.
+
+A daily check retries deferred native changes from the latest `main`; Windows
+releases and compatible over-the-air updates continue independently. While a native
+build is deferred, the installed app keeps its last compatible update. GitHub's
+workflow summary explains any delay. For an urgent native update, run **Personal
+iPhone Preview** manually with **urgent_native_build** checked. This bypasses the
+three-day wait, but still respects the cap and avoids overlapping EAS builds.
 
 ## Upstream sync
 

@@ -69,6 +69,7 @@ jobs:
         run: |
           vp test run \
             scripts/fork-sync.test.ts \
+            scripts/mobile-build-budget.test.ts \
             scripts/merge-update-manifests.test.ts \
             apps/desktop/src/updates/DesktopUpdates.test.ts \
             apps/desktop/src/updates/windowsUpdateSelection.test.ts \

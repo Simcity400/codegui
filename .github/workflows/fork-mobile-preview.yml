@@ -2,6 +2,14 @@ name: Personal iPhone Preview
 
 on:
   workflow_dispatch:
+    inputs:
+      urgent_native_build:
+        description: Skip the three-day native build cooldown (the budget cap still applies)
+        type: boolean
+        default: false
+  # Retry deferred native changes even when no new commits arrive.
+  schedule:
+    - cron: "43 3 * * *"
   # fork-sync.yml calls this after it pushes a merged main. A push made with
   # GITHUB_TOKEN never fires `push` triggers, so without this entry the iPhone
   # OTA silently stopped tracking main whenever the scheduled sync — rather
@@ -37,7 +45,7 @@ concurrency:
 
 jobs:
   deploy:
-    name: Build if needed, then publish
+    name: Publish updates and budget native builds
     if: github.repository == 'Simcity400/t3code-personal'
     runs-on: ubuntu-latest
     timeout-minutes: 45
@@ -60,7 +68,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
         with:
-          ref: ${{ inputs.ref != '' && inputs.ref || github.sha }}
+          ref: ${{ inputs.ref || (github.event_name == 'schedule' && 'main') || github.sha }}
           fetch-depth: 0
 
       - name: Setup Vite+
@@ -75,7 +83,7 @@ jobs:
       - name: Check mobile features
         run: |
           vp run --filter @t3tools/mobile typecheck
-          vp test run apps/mobile/src/features/threads/use-composer-command-menu.test.ts packages/client-runtime/src/state/subagentRuntime.test.ts packages/client-runtime/src/state/codexGoal.test.ts
+          vp test run scripts/mobile-build-budget.test.ts apps/mobile/src/features/threads/use-composer-command-menu.test.ts packages/client-runtime/src/state/subagentRuntime.test.ts packages/client-runtime/src/state/codexGoal.test.ts
 
       - name: Expose pnpm
         run: |
@@ -98,13 +106,6 @@ jobs:
           EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
         run: eas env:pull preview --non-interactive
 
-      # Publish first so a bundling failure is visible and cannot spend a native build.
-      - name: Publish the iPhone update
-        working-directory: apps/mobile
-        env:
-          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
-        run: eas update --auto --branch preview --platform ios --environment preview --non-interactive
-
       - name: Find a compatible iPhone build
         id: fingerprint
         uses: expo/expo-github-action/continuous-deploy-fingerprint-info@main
@@ -116,8 +117,27 @@ jobs:
           environment: preview
           working-directory: apps/mobile
 
+      # Publish before building so a bundling failure cannot spend a native build.
+      # A daily retry with an existing runtime has no new update to publish.
+      # Reusable nightly calls inherit the caller's scheduled event, but carry ref.
+      - name: Publish the iPhone update
+        if: github.event_name != 'schedule' || inputs.ref != '' || steps.fingerprint.outputs.ios-build-id == ''
+        working-directory: apps/mobile
+        env:
+          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+        run: eas update --auto --branch preview --platform ios --environment preview --non-interactive
+
+      - name: Check the native build budget
+        id: budget
+        working-directory: apps/mobile
+        env:
+          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+          COMPATIBLE_IOS_BUILD_ID: ${{ steps.fingerprint.outputs.ios-build-id }}
+          URGENT_NATIVE_BUILD: ${{ github.event_name == 'workflow_dispatch' && inputs.urgent_native_build == true }}
+        run: node ../../scripts/mobile-build-budget.ts
+
       - name: Build a new iPhone runtime when needed
-        if: steps.fingerprint.outputs.ios-build-id == ''
+        if: steps.budget.outputs.build == 'true'
         working-directory: apps/mobile
         env:
           EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
