@@ -4,12 +4,7 @@ import { withUniwind } from "uniwind";
 
 const ThemedSvg = withUniwind(Svg);
 
-/**
- * The desktop app's agents glyph (lucide `bot`), drawn from the same paths so
- * subagents look identical on every client. The native iOS header cannot
- * render a component, so it uses the PNG rasterization of these paths under
- * assets/icons as a tinted template image.
- */
+/** The desktop agents glyph, using the same SVG paths on mobile. */
 export function BotIcon(props: {
   readonly size?: number;
   readonly color?: ColorValue;
@@ -41,9 +36,3 @@ export function BotIcon(props: {
     </ThemedSvg>
   );
 }
-
-/** Native stack header icon: tinted by the header, so it follows the theme. */
-export const BOT_HEADER_ICON = {
-  type: "image",
-  source: require("../../assets/icons/bot.png") as number,
-} as const;

@@ -98,19 +98,29 @@ jobs:
           EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
         run: eas env:pull preview --non-interactive
 
-      - name: Deploy only to a compatible iPhone runtime
-        id: deploy
-        uses: expo/expo-github-action/continuous-deploy-fingerprint@main
+      # Publish first so a bundling failure is visible and cannot spend a native build.
+      - name: Publish the iPhone update
+        working-directory: apps/mobile
+        env:
+          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+        run: eas update --auto --branch preview --platform ios --environment preview --non-interactive
+
+      - name: Find a compatible iPhone build
+        id: fingerprint
+        uses: expo/expo-github-action/continuous-deploy-fingerprint-info@main
         env:
           EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
         with:
           profile: preview
-          branch: preview
           platform: ios
           environment: preview
           working-directory: apps/mobile
-          github-token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Report required native install
-        if: steps.deploy.outputs.ios-did-start-new-build == 'true'
-        run: echo 'Native inputs changed. Install the new iPhone preview build before expecting its over-the-air updates.' >> "$GITHUB_STEP_SUMMARY"
+      - name: Build a new iPhone runtime when needed
+        if: steps.fingerprint.outputs.ios-build-id == ''
+        working-directory: apps/mobile
+        env:
+          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+        run: |
+          eas build --profile preview --platform ios --non-interactive --wait
+          echo 'Native inputs changed. Install the new iPhone preview build before expecting its over-the-air updates.' >> "$GITHUB_STEP_SUMMARY"
