@@ -214,4 +214,91 @@ it.layer(NodeServices.layer)("decider deletion flows", (it) => {
       expect(normalizeDeleteEvent(forcedResult)).toEqual(normalizeDeleteEvent(sequentialEvents));
     }),
   );
+
+  it.effect("promotes active side chats before deleting their parent", () =>
+    Effect.gen(function* () {
+      const readModel = yield* seedReadModel;
+      const now = "2026-01-01T00:00:00.000Z";
+      const parentId = asThreadId("thread-delete-1");
+      const sideChatId = asThreadId("thread-side-chat");
+      const promotedSideChatId = asThreadId("thread-side-chat-promoted");
+      const withSideChat = yield* projectEvent(readModel, {
+        sequence: 4,
+        eventId: asEventId("evt-thread-side-chat"),
+        aggregateKind: "thread",
+        aggregateId: sideChatId,
+        type: "thread.created",
+        occurredAt: now,
+        commandId: asCommandId("cmd-thread-side-chat"),
+        causationEventId: null,
+        correlationId: asCommandId("cmd-thread-side-chat"),
+        metadata: {},
+        payload: {
+          threadId: sideChatId,
+          projectId: asProjectId("project-delete"),
+          title: "Side Chat",
+          modelSelection: {
+            instanceId: ProviderInstanceId.make("codex"),
+            model: "gpt-5-codex",
+          },
+          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+          runtimeMode: "approval-required",
+          branch: null,
+          worktreePath: null,
+          forkedFromThreadId: parentId,
+          sideChatPromotedAt: null,
+          createdAt: now,
+          updatedAt: now,
+        },
+      });
+      const withPromotedSideChat = yield* projectEvent(withSideChat, {
+        sequence: 5,
+        eventId: asEventId("evt-thread-side-chat-promoted"),
+        aggregateKind: "thread",
+        aggregateId: promotedSideChatId,
+        type: "thread.created",
+        occurredAt: now,
+        commandId: asCommandId("cmd-thread-side-chat-promoted"),
+        causationEventId: null,
+        correlationId: asCommandId("cmd-thread-side-chat-promoted"),
+        metadata: {},
+        payload: {
+          threadId: promotedSideChatId,
+          projectId: asProjectId("project-delete"),
+          title: "Promoted Side Chat",
+          modelSelection: {
+            instanceId: ProviderInstanceId.make("codex"),
+            model: "gpt-5-codex",
+          },
+          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+          runtimeMode: "approval-required",
+          branch: null,
+          worktreePath: null,
+          forkedFromThreadId: parentId,
+          sideChatPromotedAt: now,
+          createdAt: now,
+          updatedAt: now,
+        },
+      });
+
+      const result = yield* decideOrchestrationCommand({
+        command: {
+          type: "thread.delete",
+          commandId: asCommandId("cmd-delete-parent-with-side-chat"),
+          threadId: parentId,
+        },
+        readModel: withPromotedSideChat,
+      });
+      const events = Array.isArray(result) ? result : [result];
+
+      expect(events.map((event) => event.type)).toEqual(["thread.meta-updated", "thread.deleted"]);
+      const promotion = events[0];
+      expect(promotion?.aggregateId).toBe(sideChatId);
+      if (promotion?.type !== "thread.meta-updated") {
+        throw new Error("Expected the side chat promotion event first");
+      }
+      expect(promotion.payload.sideChatPromotedAt).not.toBeNull();
+      expect(events.some((event) => event.aggregateId === promotedSideChatId)).toBe(false);
+    }),
+  );
 });

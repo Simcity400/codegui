@@ -10522,6 +10522,10 @@ export default function ChatView(props: ChatViewProps) {
             onAddPullRequest={addPullRequestSurface}
             onAddPullRequests={addPullRequestsSurface}
             onAddAgents={addAgentsSurface}
+            onAddSideChat={addSideChatSurface}
+            onOpenSideChat={openSideChatSurface}
+            sideChatAvailable={sideChatAvailable}
+            sideChatTitlesById={sideChatTitlesById}
             onAddDevice={addDeviceSurface}
             browserAvailable={isPreviewSupportedInRuntime()}
             terminalAvailable={activeProject !== null}

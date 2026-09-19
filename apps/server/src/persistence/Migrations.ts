@@ -10,6 +10,7 @@
 
 import * as Migrator from "effect/unstable/sql/Migrator";
 import * as Effect from "effect/Effect";
+import { ensureForkColumns, reconcileForkMigrations } from "./ForkCompatibility.ts";
 
 // Import all migrations statically
 import Migration0001 from "./Migrations/001_OrchestrationEvents.ts";
@@ -65,7 +66,6 @@ import Migration0050 from "./Migrations/050_ProjectionThreadPullRequests.ts";
 import Migration0051 from "./Migrations/051_ProjectionThreadMessageContext.ts";
 import Migration0052 from "./Migrations/052_ProjectionThreadTitleState.ts";
 import Migration0053 from "./Migrations/053_PullRequestFilesViewed.ts";
-import Migration0054 from "./Migrations/054_ProjectionThreadSideChats.ts";
 
 /**
  * Migration loader with all migrations defined inline.
@@ -131,7 +131,6 @@ const migrationEntries = [
   [51, "ProjectionThreadMessageContext", Migration0051],
   [52, "ProjectionThreadTitleState", Migration0052],
   [53, "PullRequestFilesViewed", Migration0053],
-  [54, "ProjectionThreadSideChats", Migration0054],
 ] as const;
 
 export const migrationManifest = migrationEntries.map(([id, name]) => [id, name] as const);
@@ -168,7 +167,9 @@ export interface RunMigrationsOptions {
 export const runMigrations = Effect.fn("runMigrations")(function* ({
   toMigrationInclusive,
 }: RunMigrationsOptions = {}) {
+  yield* reconcileForkMigrations(migrationManifest);
   const executedMigrations = yield* run({ loader: makeMigrationLoader(toMigrationInclusive) });
+  yield* ensureForkColumns();
   const migrations = executedMigrations.map(([id, name]) => `${id}_${name}`);
   yield* migrations.length === 0
     ? Effect.logDebug("Database schema is current")

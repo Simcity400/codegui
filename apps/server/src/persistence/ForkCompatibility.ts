@@ -86,10 +86,6 @@ export const ensureForkColumns = Effect.fn("ensureForkColumns")(function* () {
   const sql = yield* SqlClient.SqlClient;
   yield* sql.withTransaction(
     Effect.gen(function* () {
-      const columns = yield* sql<{ name: string }>`PRAGMA table_info(projection_thread_messages)`;
-      if (columns.length > 0 && !columns.some((column) => column.name === "agent_id")) {
-        yield* sql`ALTER TABLE projection_thread_messages ADD COLUMN agent_id TEXT`;
-      }
       const threadColumns = yield* sql<{ name: string }>`PRAGMA table_info(projection_threads)`;
       if (threadColumns.length > 0) {
         if (!threadColumns.some((column) => column.name === "forked_from_thread_id")) {
@@ -98,44 +94,6 @@ export const ensureForkColumns = Effect.fn("ensureForkColumns")(function* () {
         if (!threadColumns.some((column) => column.name === "side_chat_promoted_at")) {
           yield* sql`ALTER TABLE projection_threads ADD COLUMN side_chat_promoted_at TEXT`;
         }
-      }
-      if (
-        threadColumns.length > 0 &&
-        !threadColumns.some((column) => column.name === "goal_json")
-      ) {
-        yield* sql`ALTER TABLE projection_threads ADD COLUMN goal_json TEXT`;
-      }
-      // Agent-scoped detail reads filter on this side table instead of the
-      // activity payloads, which run to megabytes per row. Backfilling reads
-      // every payload once; adding a column would rewrite every row instead.
-      const activityColumns = yield* sql<{
-        name: string;
-      }>`PRAGMA table_info(projection_thread_activities)`;
-      const agentTables =
-        yield* sql`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'projection_thread_activity_agents'`;
-      if (activityColumns.length > 0 && agentTables.length === 0) {
-        yield* sql`CREATE TABLE projection_thread_activity_agents (
-          activity_id TEXT PRIMARY KEY,
-          thread_id TEXT NOT NULL,
-          agent_id TEXT NOT NULL,
-          sequence INTEGER
-        )`;
-        yield* sql`CREATE INDEX idx_projection_thread_activity_agents_thread_agent_sequence
-          ON projection_thread_activity_agents (thread_id, agent_id, sequence)`;
-        yield* sql`INSERT INTO projection_thread_activity_agents (activity_id, thread_id, agent_id, sequence)
-          SELECT activity_id, thread_id, json_extract(payload_json, '$.agentId'), sequence
-          FROM projection_thread_activities
-          WHERE json_type(payload_json, '$.agentId') = 'text'
-            AND length(trim(json_extract(payload_json, '$.agentId'))) > 0`;
-      }
-      // Thread-detail reads pin the lifecycle rows of still-running tasks
-      // onto every page (ProjectionSnapshotQuery). Narrowing on kind keeps
-      // that scan to task rows; without it a large live thread pays a full
-      // per-thread activity scan on every read. Lives here, not in a numbered
-      // migration: upstream already owns the next ids on forked databases.
-      if (activityColumns.length > 0) {
-        yield* sql`CREATE INDEX IF NOT EXISTS idx_projection_thread_activities_thread_kind
-          ON projection_thread_activities (thread_id, kind)`;
       }
     }),
   );

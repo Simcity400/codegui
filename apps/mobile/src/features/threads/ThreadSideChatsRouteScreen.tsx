@@ -154,7 +154,7 @@ export function ThreadSideChatsRouteScreen({
             onSwipeableWillOpen={handleSwipeableWillOpen}
             primaryAction={{
               accessibilityLabel: `Promote ${item.title} to a thread`,
-              icon: "arrow.up.right.square",
+              icon: "arrow.up.right",
               label: "Promote",
               onPress: () => void promoteChat(item),
             }}
@@ -168,11 +168,7 @@ export function ThreadSideChatsRouteScreen({
                 onPress={() => openChat(item)}
                 className="flex-row items-center gap-3 px-5 py-3 active:opacity-70"
               >
-                <SymbolView
-                  name="bubble.left.and.bubble.right"
-                  size={20}
-                  tintColorClassName="accent-icon"
-                />
+                <SymbolView name="text.bubble" size={20} tintColorClassName="accent-icon" />
                 <View className="min-w-0 flex-1">
                   <Text className="text-base text-foreground" numberOfLines={2}>
                     {item.title}
