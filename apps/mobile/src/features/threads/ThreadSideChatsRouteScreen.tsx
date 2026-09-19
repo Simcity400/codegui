@@ -27,11 +27,7 @@ import { useAtomCommand } from "../../state/use-atom-command";
 import { ThreadSwipeable } from "../home/thread-swipe-actions";
 import { resolveThreadStatus } from "./threadPresentation";
 
-/**
- * The side chats attached to one thread. Reached from the thread header only
- * when two or more exist (a single side chat opens directly). Rows swipe to
- * promote or delete, matching the home list's row actions.
- */
+/** Side chats attached to a thread; swipe a row to promote or delete it. */
 export function ThreadSideChatsRouteScreen({
   route,
 }: StaticScreenProps<{

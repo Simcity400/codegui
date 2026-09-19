@@ -271,6 +271,13 @@ import {
   SourceControlRepositoryLookupInput,
 } from "./sourceControl.ts";
 import { VcsError } from "./vcs.ts";
+import {
+  CodexGoal,
+  CodexGoalClearResult,
+  CodexGoalOperationError,
+  CodexGoalSetInput,
+  CodexGoalThreadInput,
+} from "./codexGoal.ts";
 
 export const WS_METHODS = {
   // Project registry methods
@@ -306,6 +313,9 @@ export const WS_METHODS = {
   providerInstallCancel: "provider.install.cancel",
   providerInstallSubscribe: "provider.install.subscribe",
   providerInstallRemove: "provider.install.remove",
+
+  codexGoalSet: "codex.goal.set",
+  codexGoalClear: "codex.goal.clear",
 
   // VCS methods
   vcsPull: "vcs.pull",
@@ -1200,6 +1210,18 @@ const WsSubscribePreviewEventsRpc = Rpc.make(WS_METHODS.subscribePreviewEvents, 
   stream: true,
 });
 
+export const WsCodexGoalSetRpc = Rpc.make(WS_METHODS.codexGoalSet, {
+  payload: CodexGoalSetInput,
+  success: CodexGoal,
+  error: Schema.Union([CodexGoalOperationError, EnvironmentAuthorizationError]),
+});
+
+export const WsCodexGoalClearRpc = Rpc.make(WS_METHODS.codexGoalClear, {
+  payload: CodexGoalThreadInput,
+  success: CodexGoalClearResult,
+  error: Schema.Union([CodexGoalOperationError, EnvironmentAuthorizationError]),
+});
+
 const WsSubscribeDiscoveredLocalServersRpc = Rpc.make(WS_METHODS.subscribeDiscoveredLocalServers, {
   payload: Schema.Struct({
     configuredUrls: Schema.optional(ConfiguredLocalServerUrls),
@@ -1502,6 +1524,8 @@ export const WsRpcGroup = RpcGroup.make(
   WsPreviewAutomationRespondRpc,
   WsPreviewAutomationFocusHostRpc,
   WsSubscribePreviewEventsRpc,
+  WsCodexGoalSetRpc,
+  WsCodexGoalClearRpc,
   WsSubscribeDiscoveredLocalServersRpc,
   WsDeviceConfigureRpc,
   WsDeviceListRpc,

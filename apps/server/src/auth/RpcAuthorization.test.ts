@@ -37,6 +37,13 @@ describe("RPC authorization scopes", () => {
     expect(requiredScopeForRpcMethod(WS_METHODS.cloudInstallRelayClient)).toBe(AuthRelayWriteScope);
   });
 
+  it("requires operate permission for native Codex Goal mutations", () => {
+    expect(requiredScopeForRpcMethod(WS_METHODS.codexGoalSet)).toBe(AuthOrchestrationOperateScope);
+    expect(requiredScopeForRpcMethod(WS_METHODS.codexGoalClear)).toBe(
+      AuthOrchestrationOperateScope,
+    );
+  });
+
   it("requires permission to operate on a thread before uploading feedback", () => {
     expect(requiredScopeForRpcMethod(WS_METHODS.providerUploadFeedback)).toBe(
       AuthOrchestrationOperateScope,

@@ -1,3 +1,6 @@
+import { useSideChatControls } from "./useSideChatControls";
+import { ControlPill } from "../../components/ControlPill";
+import { useCodexGoalControls } from "./useCodexGoalControls";
 import type { WorktreeSetupCardProps } from "./worktree-setup-card";
 import type { ComposerTextPaste } from "../../native/T3ComposerEditor.types";
 import { type EnvironmentConnectionPhase } from "@t3tools/client-runtime/connection";
@@ -679,7 +682,18 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
       ? { width: workspaceContentWidth.value, right: undefined }
       : { width: undefined, right: 0 },
   );
+  const { handleGoalCommand, controls: codexGoalControls } = useCodexGoalControls({
+    environmentId: props.environmentId,
+    selectedThread: props.selectedThread,
+    serverConfig: props.serverConfig,
+    showContent,
+  });
   const selectedInstanceId = props.selectedThread.modelSelection.instanceId;
+  const handleSideChatCommand = useSideChatControls(
+    props.environmentId,
+    props.selectedThread,
+    props.serverConfig?.providers.find((p) => p.instanceId === selectedInstanceId)?.driver,
+  );
   useStreamingHaptics(props.selectedThread.id, props.selectedThreadFeed);
   const selectedProviderSkills = useMemo(() => {
     const provider = props.serverConfig?.providers.find(
@@ -763,6 +777,29 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
   ]);
 
   const handleSendMessage = useCallback(async () => {
+    const submittedDraft = props.draftMessage;
+    const sideResult = handleSideChatCommand(
+      submittedDraft,
+      props.draftAttachments.length > 0,
+      () => {
+        if (draftMessageRef.current === submittedDraft) props.onChangeDraftMessage("");
+      },
+    );
+    if (sideResult !== false) {
+      await sideResult;
+      return null;
+    }
+    const goalCommandResult = handleGoalCommand(
+      submittedDraft,
+      props.draftAttachments.length > 0,
+      () => {
+        if (draftMessageRef.current === submittedDraft) props.onChangeDraftMessage("");
+      },
+    );
+    if (goalCommandResult !== false) {
+      await goalCommandResult;
+      return null;
+    }
     const targetThreadKey = selectedThreadKey;
     const hasUserMessage = selectedThreadFeed.some(
       (entry) => entry.type === "message" && entry.message.role === "user",
@@ -790,6 +827,13 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
   }, [
     anchorMessageId,
     clearUsageLimitsFor,
+    handleGoalCommand,
+    handleSideChatCommand,
+    props.draftAttachments,
+    props.draftMessage,
+    props.onChangeDraftMessage,
+    props.selectedThread.id,
+    props.selectedThread.session,
     props.onSendMessage,
     props.selectedThread.latestTurn,
     props.selectedThreadQueueCount,
@@ -1052,6 +1096,30 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
                     : undefined
                 }
               >
+                <View className="flex-row gap-2 px-3 pb-2">
+                  <ControlPill
+                    variant="pill"
+                    label="Agents"
+                    onPress={() =>
+                      navigation.navigate("ThreadAgents", {
+                        environmentId: props.environmentId,
+                        threadId: props.selectedThread.id,
+                      })
+                    }
+                  />
+                  <ControlPill
+                    variant="pill"
+                    label="Side chats"
+                    onPress={() =>
+                      navigation.navigate("ThreadSideChats", {
+                        environmentId: props.environmentId,
+                        threadId:
+                          props.selectedThread.forkedFromThreadId ?? props.selectedThread.id,
+                      })
+                    }
+                  />
+                </View>
+                {codexGoalControls}
                 <ThreadComposer
                   editorRef={composerEditorRef}
                   draftMessage={props.draftMessage}

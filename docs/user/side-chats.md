@@ -10,6 +10,6 @@ Side chats never appear in the thread list. They live only beside the thread the
 
 On desktop and wide browser windows, `/side` opens a tab beside the conversation. You can also start one from the right panel's **+** menu. Closing the tab keeps the side chat; reopen it from the **+** menu. The tab header has **Promote to thread**, which turns it into a normal thread, and **Delete side chat**. Use **Open full view** for attachments, approvals, or questions that need your answer.
 
-On mobile and narrow browser windows, side chats open as full-screen conversations. A thread that has side chats shows a side chats button in its header: with one side chat it opens directly, with several it opens a list you can swipe to promote or delete. Inside a side chat, the same header button offers **Promote to thread** and **Delete side chat**. Leaving a side chat keeps it. A side chat opened in a narrow browser window shows these actions above the transcript.
+On mobile, `/side` opens a full-screen conversation. Use **Side chats** above the composer to return to the related list; swipe a row to promote or delete it. Leaving a side chat keeps it. In narrow browser windows, side chats also open full-screen, with their actions above the transcript.
 
 Deleting a parent thread promotes its side chats, so they stay available in the thread list. If the first message cannot be submitted, its text remains in the side chat's composer so you can retry.

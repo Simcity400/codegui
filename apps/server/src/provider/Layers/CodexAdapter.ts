@@ -10,6 +10,8 @@
 import {
   EventId,
   type CanonicalItemType,
+  type CodexGoal,
+  TurnId,
   type CanonicalRequestType,
   type CodexSettings,
   ProviderDriverKind,
@@ -994,6 +996,18 @@ function runtimeEventBase(
   };
 }
 
+function toCodexGoal(goal: EffectCodexSchema.V2ThreadGoalUpdatedNotification["goal"]): CodexGoal {
+  return {
+    objective: goal.objective,
+    status: goal.status,
+    ...(goal.tokenBudget !== undefined ? { tokenBudget: goal.tokenBudget } : {}),
+    tokensUsed: goal.tokensUsed,
+    timeUsedSeconds: goal.timeUsedSeconds,
+    createdAt: goal.createdAt,
+    updatedAt: goal.updatedAt,
+  };
+}
+
 function mapItemLifecycle(
   event: ProviderEvent,
   canonicalThreadId: ThreadId,
@@ -1591,6 +1605,38 @@ function mapToRuntimeEvents(
         payload: {
           usage: normalizedUsage,
         },
+      },
+    ];
+  }
+
+  if (event.method === "thread/goal/updated") {
+    const payload = readPayload(EffectCodexSchema.V2ThreadGoalUpdatedNotification, event.payload);
+    if (!payload) {
+      return [];
+    }
+    // Codex stamps the turn that changed the goal (null for user-driven
+    // edits); T3 keeps it so a blocked goal can point at the explaining turn.
+    const goalTurnId = trimText(payload.turnId ?? undefined);
+    return [
+      {
+        type: "thread.goal.updated",
+        ...runtimeEventBase(event, canonicalThreadId),
+        ...(goalTurnId ? { turnId: TurnId.make(goalTurnId) } : {}),
+        payload: { goal: toCodexGoal(payload.goal) },
+      },
+    ];
+  }
+
+  if (event.method === "thread/goal/cleared") {
+    const payload = readPayload(EffectCodexSchema.V2ThreadGoalClearedNotification, event.payload);
+    if (!payload) {
+      return [];
+    }
+    return [
+      {
+        type: "thread.goal.cleared",
+        ...runtimeEventBase(event, canonicalThreadId),
+        payload: {},
       },
     ];
   }
@@ -2281,7 +2327,9 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
           ...(options?.environment ? { environment: options.environment } : {}),
           ...(codexConfig.homePath ? { homePath: codexConfig.homePath } : {}),
           ...(isCodexResumeCursorSchema(input.resumeCursor)
-            ? { resumeCursor: input.resumeCursor }
+            ? input.forkFromThreadId !== undefined
+              ? { forkResumeCursor: input.resumeCursor }
+              : { resumeCursor: input.resumeCursor }
             : {}),
           runtimeMode: input.runtimeMode,
           ...(input.modelSelection?.instanceId === boundInstanceId
@@ -2641,6 +2689,30 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
       ),
     );
 
+  const codexGoal: NonNullable<CodexAdapterShape["codexGoal"]> = {
+    set: (input) => {
+      const { threadId, ...params } = input;
+      return requireSession(threadId).pipe(
+        Effect.flatMap((session) => session.runtime.setGoal(params)),
+        Effect.map((response) => toCodexGoal(response.goal)),
+        Effect.mapError((cause) =>
+          cause._tag === "ProviderAdapterSessionNotFoundError"
+            ? cause
+            : mapCodexRuntimeError(threadId, "thread/goal/set", cause),
+        ),
+      );
+    },
+    clear: (threadId) =>
+      requireSession(threadId).pipe(
+        Effect.flatMap((session) => session.runtime.clearGoal),
+        Effect.mapError((cause) =>
+          cause._tag === "ProviderAdapterSessionNotFoundError"
+            ? cause
+            : mapCodexRuntimeError(threadId, "thread/goal/clear", cause),
+        ),
+      ),
+  };
+
   const respondToRequest: CodexAdapterShape["respondToRequest"] = (threadId, requestId, decision) =>
     requireSession(threadId).pipe(
       Effect.flatMap((session) => session.runtime.respondToRequest(requestId, decision)),
@@ -2731,6 +2803,7 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
     readThread,
     rollbackThread,
     uploadFeedback,
+    codexGoal,
     respondToRequest,
     respondToUserInput,
     stopSession,

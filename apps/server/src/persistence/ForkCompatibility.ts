@@ -97,6 +97,9 @@ export const ensureForkColumns = Effect.fn("ensureForkColumns")(function* () {
       }
       const threadColumns = yield* sql<{ name: string }>`PRAGMA table_info(projection_threads)`;
       if (threadColumns.length > 0) {
+        if (!threadColumns.some((column) => column.name === "goal_json")) {
+          yield* sql`ALTER TABLE projection_threads ADD COLUMN goal_json TEXT`;
+        }
         if (!threadColumns.some((column) => column.name === "forked_from_thread_id")) {
           yield* sql`ALTER TABLE projection_threads ADD COLUMN forked_from_thread_id TEXT`;
         }

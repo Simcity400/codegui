@@ -1,3 +1,4 @@
+import { OrchestrationThreadGoal } from "@t3tools/contracts";
 import {
   AgentSessionImportSource,
   ApprovalRequestId,
@@ -136,6 +137,7 @@ const ProjectionThreadDbRowSchema = ProjectionThread.mapFields(
     modelSelection: Schema.fromJsonString(ModelSelection),
     titleState: Schema.NullOr(Schema.fromJsonString(ThreadTitleState)),
     linkedPullRequest: Schema.NullOr(Schema.fromJsonString(ThreadLinkedPullRequest)),
+    goal: Schema.NullOr(Schema.fromJsonString(OrchestrationThreadGoal)),
     branchPullRequest: Schema.NullOr(Schema.fromJsonString(ThreadLinkedPullRequest)),
   }),
 );
@@ -583,6 +585,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           branch,
           worktree_path AS "worktreePath",
           linked_pull_request_json AS "linkedPullRequest",
+          goal_json AS "goal",
           branch_pull_request_json AS "branchPullRequest",
           forked_from_thread_id AS "forkedFromThreadId",
           side_chat_promoted_at AS "sideChatPromotedAt",
@@ -626,6 +629,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           branch,
           worktree_path AS "worktreePath",
           linked_pull_request_json AS "linkedPullRequest",
+          goal_json AS "goal",
           branch_pull_request_json AS "branchPullRequest",
           forked_from_thread_id AS "forkedFromThreadId",
           side_chat_promoted_at AS "sideChatPromotedAt",
@@ -701,6 +705,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           branch,
           worktree_path AS "worktreePath",
           linked_pull_request_json AS "linkedPullRequest",
+          goal_json AS "goal",
           branch_pull_request_json AS "branchPullRequest",
           forked_from_thread_id AS "forkedFromThreadId",
           side_chat_promoted_at AS "sideChatPromotedAt",
@@ -1270,6 +1275,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           branch,
           worktree_path AS "worktreePath",
           linked_pull_request_json AS "linkedPullRequest",
+          goal_json AS "goal",
           branch_pull_request_json AS "branchPullRequest",
           forked_from_thread_id AS "forkedFromThreadId",
           side_chat_promoted_at AS "sideChatPromotedAt",
@@ -1729,7 +1735,8 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
             'thread.activity-appended',
             'thread.turn-diff-completed',
             'thread.reverted',
-            'thread.session-set'
+            'thread.session-set',
+            'thread.goal-set'
           )
       `,
   });
@@ -2448,6 +2455,13 @@ pending_approval_requests AS (
                   repositoryIdentities.get(row.projectId),
                 ),
                 branchPullRequest: row.branchPullRequest,
+                ...(row.goal == null ? {} : { goal: row.goal }),
+                ...(row.forkedFromThreadId == null
+                  ? {}
+                  : { forkedFromThreadId: row.forkedFromThreadId }),
+                ...(row.sideChatPromotedAt == null
+                  ? {}
+                  : { sideChatPromotedAt: row.sideChatPromotedAt }),
                 latestTurn: latestTurnByThread.get(row.threadId) ?? null,
                 createdAt: row.createdAt,
                 updatedAt: row.updatedAt,
@@ -2693,6 +2707,13 @@ pending_approval_requests AS (
                     repositoryIdentities.get(row.projectId),
                   ),
                   branchPullRequest: row.branchPullRequest,
+                  ...(row.goal == null ? {} : { goal: row.goal }),
+                  ...(row.forkedFromThreadId == null
+                    ? {}
+                    : { forkedFromThreadId: row.forkedFromThreadId }),
+                  ...(row.sideChatPromotedAt == null
+                    ? {}
+                    : { sideChatPromotedAt: row.sideChatPromotedAt }),
                   latestTurn: latestTurnByThread.get(row.threadId) ?? null,
                   createdAt: row.createdAt,
                   updatedAt: row.updatedAt,
@@ -2844,6 +2865,12 @@ pending_approval_requests AS (
                         branch: row.branch,
                         worktreePath: row.worktreePath,
                         branchPullRequest: row.branchPullRequest,
+                        ...(row.forkedFromThreadId == null
+                          ? {}
+                          : { forkedFromThreadId: row.forkedFromThreadId }),
+                        ...(row.sideChatPromotedAt == null
+                          ? {}
+                          : { sideChatPromotedAt: row.sideChatPromotedAt }),
                         ...mapThreadPullRequests(
                           pullRequestsByThread.get(row.threadId) ?? [],
                           row.projectId,
@@ -3007,6 +3034,12 @@ pending_approval_requests AS (
                   branch: row.branch,
                   worktreePath: row.worktreePath,
                   branchPullRequest: row.branchPullRequest,
+                  ...(row.forkedFromThreadId == null
+                    ? {}
+                    : { forkedFromThreadId: row.forkedFromThreadId }),
+                  ...(row.sideChatPromotedAt == null
+                    ? {}
+                    : { sideChatPromotedAt: row.sideChatPromotedAt }),
                   ...mapThreadPullRequests(
                     pullRequestsByThread.get(row.threadId) ?? [],
                     row.projectId,
@@ -3677,6 +3710,7 @@ pending_approval_requests AS (
                 ?.repositoryIdentity,
         ),
         branchPullRequest: threadRow.value.branchPullRequest,
+        ...(threadRow.value.goal == null ? {} : { goal: threadRow.value.goal }),
         ...(threadRow.value.forkedFromThreadId != null
           ? { forkedFromThreadId: threadRow.value.forkedFromThreadId }
           : {}),

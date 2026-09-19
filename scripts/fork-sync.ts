@@ -207,9 +207,18 @@ if (import.meta.main) {
   if (process.argv[2] === "check") {
     const releases = (repository: string): Release[] =>
       JSON.parse(
-        NodeChildProcess.execFileSync("gh", ["api", `repos/${repository}/releases?per_page=30`], {
-          encoding: "utf8",
-        }),
+        NodeChildProcess.execFileSync(
+          "gh",
+          [
+            "api",
+            `repos/${repository}/releases?per_page=30`,
+            "--jq",
+            "[.[] | {tag_name, target_commitish, published_at, prerelease, draft, assets: [.assets[] | {name, size}]}]",
+          ],
+          {
+            encoding: "utf8",
+          },
+        ),
       );
     const upstream = latestNightly(releases("pingdotgg/t3code"));
     const tracked = JSON.parse(

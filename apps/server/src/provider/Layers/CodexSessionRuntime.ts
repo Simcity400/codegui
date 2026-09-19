@@ -178,6 +178,7 @@ export interface CodexSessionRuntimeOptions {
   readonly model?: string;
   readonly serviceTier?: CodexServiceTier | undefined;
   readonly resumeCursor?: CodexResumeCursor;
+  readonly forkResumeCursor?: CodexResumeCursor;
   readonly appServerArgs?: ReadonlyArray<string>;
   /** Capabilities the session's `t3-code` MCP credential grants; drives the prompt blocks. */
   readonly mcpCapabilities?: ReadonlySet<string>;
@@ -220,6 +221,17 @@ export interface CodexSessionRuntimeShape {
   readonly uploadFeedback: (
     reason?: string,
   ) => Effect.Effect<EffectCodexSchema.V2FeedbackUploadResponse, CodexSessionRuntimeError>;
+  readonly setGoal: (
+    input: Omit<EffectCodexSchema.V2ThreadGoalSetParams, "threadId">,
+  ) => Effect.Effect<EffectCodexSchema.V2ThreadGoalSetResponse, CodexSessionRuntimeError>;
+  readonly clearGoal: Effect.Effect<
+    EffectCodexSchema.V2ThreadGoalClearResponse,
+    CodexSessionRuntimeError
+  >;
+  readonly getGoal: Effect.Effect<
+    EffectCodexSchema.V2ThreadGoalGetResponse,
+    CodexSessionRuntimeError
+  >;
   readonly respondToRequest: (
     requestId: ApprovalRequestId,
     decision: ProviderApprovalDecision,
@@ -238,6 +250,20 @@ export type CodexSessionRuntimeError =
   | CodexSessionRuntimePendingUserInputNotFoundError
   | CodexSessionRuntimeInvalidUserInputAnswersError
   | CodexSessionRuntimeThreadIdMissingError;
+
+export const makeCodexGoalRequests = <E>(
+  client: Pick<CodexClient.CodexAppServerClient["Service"], "request">,
+  readProviderThreadId: Effect.Effect<string, E>,
+) => {
+  const threadId = readProviderThreadId;
+  const request = client.request;
+  return {
+    setGoal: (input: Parameters<CodexSessionRuntimeShape["setGoal"]>[0]) =>
+      Effect.flatMap(threadId, (id) => request("thread/goal/set", { threadId: id, ...input })),
+    getGoal: Effect.flatMap(threadId, (id) => request("thread/goal/get", { threadId: id })),
+    clearGoal: Effect.flatMap(threadId, (id) => request("thread/goal/clear", { threadId: id })),
+  };
+};
 
 export class CodexSessionRuntimePendingApprovalNotFoundError extends Schema.TaggedError<CodexSessionRuntimePendingApprovalNotFoundError>()(
   "CodexSessionRuntimePendingApprovalNotFoundError",
@@ -705,8 +731,11 @@ const decodeCodexThreadResumeMetadata = Schema.decodeUnknownEffect(CodexThreadRe
 interface CodexThreadOpenClient {
   readonly raw: {
     readonly request: (
-      method: "thread/resume",
-      payload: CodexRpc.ClientRequestParamsByMethod["thread/resume"] & {
+      method: "thread/resume" | "thread/fork",
+      payload: (
+        | CodexRpc.ClientRequestParamsByMethod["thread/resume"]
+        | CodexRpc.ClientRequestParamsByMethod["thread/fork"]
+      ) & {
         readonly excludeTurns?: boolean;
       },
     ) => Effect.Effect<unknown, CodexErrors.CodexAppServerError>;
@@ -728,6 +757,7 @@ export const openCodexThread = (input: {
   readonly requestedModel: string | undefined;
   readonly serviceTier: CodexServiceTier | undefined;
   readonly resumeThreadId: string | undefined;
+  readonly forkThreadId?: string;
 }): Effect.Effect<typeof CodexThreadResumeMetadata.Type, CodexErrors.CodexAppServerError> => {
   const resumeThreadId = input.resumeThreadId;
   const startParams = buildThreadStartParams({
@@ -736,6 +766,28 @@ export const openCodexThread = (input: {
     model: input.requestedModel,
     serviceTier: input.serviceTier,
   });
+
+  if (input.forkThreadId !== undefined) {
+    return input.client.raw
+      .request("thread/fork", {
+        ...startParams,
+        threadId: input.forkThreadId,
+        ephemeral: false,
+      })
+      .pipe(
+        Effect.flatMap((response) =>
+          decodeCodexThreadResumeMetadata(response).pipe(
+            Effect.mapError((error) =>
+              CodexErrors.CodexAppServerRequestError.invalidPayload(
+                "thread/fork",
+                "decode-payload",
+                error,
+              ),
+            ),
+          ),
+        ),
+      );
+  }
 
   if (resumeThreadId === undefined) {
     return input.client.request("thread/start", startParams);
@@ -786,6 +838,8 @@ function readNotificationThreadId(notification: CodexServerNotification): string
     case "thread/name/updated":
     case "thread/settings/updated":
     case "thread/tokenUsage/updated":
+    case "thread/goal/updated":
+    case "thread/goal/cleared":
     case "model/rerouted":
     case "turn/started":
     case "hook/started":
@@ -1055,6 +1109,8 @@ function shouldSuppressChildConversationNotification(
     method === "thread/name/updated" ||
     method === "thread/settings/updated" ||
     method === "thread/tokenUsage/updated" ||
+    method === "thread/goal/updated" ||
+    method === "thread/goal/cleared" ||
     method === "model/rerouted" ||
     method === "turn/started" ||
     method === "turn/completed" ||
@@ -1095,17 +1151,14 @@ const CHILD_AGENT_EVENT_METHODS: ReadonlySet<string> = new Set([
 ]);
 
 const CHILD_CHATTER_METHODS: ReadonlySet<string> = new Set([
-  "item/agentMessage/delta",
-  "item/reasoning/textDelta",
-  "item/reasoning/summaryTextDelta",
   "item/reasoning/summaryPartAdded",
-  "item/commandExecution/outputDelta",
-  "item/fileChange/outputDelta",
   "item/fileChange/patchUpdated",
   "item/plan/delta",
   "turn/plan/updated",
   "turn/diff/updated",
   "thread/name/updated",
+  "thread/goal/updated",
+  "thread/goal/cleared",
   "rawResponseItem/completed",
   // Child-owned thread lifecycle: the parent adapter maps these onto the
   // PARENT thread (archived/compacted state), so a child compacting would
@@ -2435,6 +2488,7 @@ export const makeCodexSessionRuntime = (
       yield* client.notify("initialized", undefined);
 
       const requestedModel = normalizeCodexModelSlug(options.model);
+      const forkThreadId = readResumeCursorThreadId(options.forkResumeCursor);
 
       const opened = yield* openCodexThread({
         client,
@@ -2444,6 +2498,7 @@ export const makeCodexSessionRuntime = (
         requestedModel,
         serviceTier: options.serviceTier,
         resumeThreadId: readResumeCursorThreadId(options.resumeCursor),
+        ...(forkThreadId !== undefined ? { forkThreadId } : {}),
       });
 
       const providerThreadId = opened.thread.id;
@@ -2457,6 +2512,19 @@ export const makeCodexSessionRuntime = (
       } satisfies ProviderSession;
       yield* Ref.set(sessionRef, session);
       yield* emitSessionEvent("session/ready", "Codex App Server session ready.");
+      yield* client.request("thread/goal/get", { threadId: providerThreadId }).pipe(
+        Effect.flatMap(({ goal }) =>
+          emitEvent({
+            kind: "notification",
+            threadId: options.threadId,
+            method: goal ? "thread/goal/updated" : "thread/goal/cleared",
+            payload: goal
+              ? { threadId: providerThreadId, goal, turnId: null }
+              : { threadId: providerThreadId },
+          }),
+        ),
+        Effect.catch((cause) => Effect.logDebug("Codex goal snapshot unavailable", { cause })),
+      );
       return session;
     });
 
@@ -2625,6 +2693,7 @@ export const makeCodexSessionRuntime = (
             threadId: providerThreadId,
           });
         }),
+      ...makeCodexGoalRequests(client, readProviderThreadId),
       respondToRequest: (requestId, decision) =>
         Effect.gen(function* () {
           const pending = (yield* Ref.get(pendingApprovalsRef)).get(requestId);

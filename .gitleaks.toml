@@ -1,0 +1,45 @@
+title = "T3 Code Personal source scanning"
+
+[extend]
+useDefault = true
+
+# Public client identifiers from .env.example, not server credentials.
+[[allowlists]]
+description = "Shipped Clerk publishable keys and public OAuth client ID"
+targetRules = ["generic-api-key"]
+regexes = ['''^pk_(live|test)_[A-Za-z0-9=]+$''', '''^hzxSgY2cH10sDU2r$''']
+
+[[allowlists]]
+description = "Pairing token alphabet, not a generated pairing token"
+targetRules = ["generic-api-key"]
+condition = "AND"
+paths = ['''(^|/)apps/server/src/auth/PairingGrantStore\.ts$''']
+regexes = ['''^23456789ABCDEFGHJKLMNPQRSTUVWXYZ$''']
+
+[[allowlists]]
+description = "Unsigned JWT fixture with a literal test signature"
+targetRules = ["generic-api-key"]
+condition = "AND"
+paths = ['''(^|/)apps/mobile/src/features/cloud/linkEnvironment\.test\.ts$''']
+regexes = ['''^eyJhbGciOiJub25lIiwidHlwIjoiSldUIn0\.eyJzdWIiOiJ1c2VyXzEyMyJ9\.test$''']
+
+[[allowlists]]
+description = "RFC WebSocket handshake example nonce"
+targetRules = ["generic-api-key"]
+condition = "AND"
+paths = ['''(^|/)apps/server/src/httpResponseErrorGuard\.test\.ts$''']
+regexes = ['''^dGhlIHNhbXBsZSBub25jZQ==$''']
+
+[[allowlists]]
+description = "Protocol test idempotency UUID"
+targetRules = ["generic-api-key"]
+condition = "AND"
+paths = ['''(^|/)packages/effect-codex-app-server/src/protocol\.test\.ts$''']
+regexes = ['''^8ae96ff3-3425-4f4c-8772-b6fd61502868$''']
+
+[[allowlists]]
+description = "Default keyboard shortcuts, not API credentials"
+targetRules = ["generic-api-key"]
+condition = "AND"
+paths = ['''(^|/)packages/shared/src/keybindings\.ts$''']
+regexes = ['''^mod\+shift\+(enter|arrowup|arrowdown)$''']

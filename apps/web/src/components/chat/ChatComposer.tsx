@@ -2356,8 +2356,22 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
         selectedProviderSkills,
         settings.showSkillsInSlashMenu,
       );
+      const forkSlashCommands = [
+        ...(selectedProvider === "codex"
+          ? [{ name: "goal", description: "Set or manage this thread's goal" }]
+          : []),
+        ...(selectedProvider === "codex" || selectedProvider === "claudeAgent"
+          ? [{ name: "side", description: "Start a side chat" }]
+          : []),
+      ];
       const providerSlashCommandItems = getProviderSlashCommandsForSlashMenu(
-        selectedProviderSlashCommands,
+        [
+          ...selectedProviderSlashCommands,
+          ...forkSlashCommands.filter(
+            (command) =>
+              !selectedProviderSlashCommands.some((existing) => existing.name === command.name),
+          ),
+        ],
         slashMenuSkills,
       ).map((command) => ({
         id: `provider-slash-command:${selectedProvider}:${command.name}`,

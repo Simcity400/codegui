@@ -110,6 +110,39 @@ const projectionSnapshotLayer = it.layer(
 );
 
 projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
+  it.effect("keeps side-chat relationships across snapshot, reconnect, and archive reads", () =>
+    Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      const query = yield* ProjectionSnapshotQuery;
+      const id = ThreadId.make("side-snapshot");
+      const at = "2026-09-20T00:00:00.000Z";
+      yield* sql`INSERT INTO projection_threads (thread_id, project_id, title, model_selection_json, runtime_mode, interaction_mode, created_at, updated_at, forked_from_thread_id, side_chat_promoted_at)
+      VALUES (${id}, 'side-project', 'Side chat', '{"instanceId":"codex","model":"gpt-5.4"}', 'full-access', 'default', ${at}, ${at}, 'parent-thread', ${at})`;
+      for (const snapshot of [
+        yield* query.getSnapshot(),
+        yield* query.getCommandReadModel(),
+        yield* query.getShellSnapshot(),
+      ]) {
+        const thread = snapshot.threads.find((thread) => thread.id === id);
+        assert.equal(thread?.forkedFromThreadId, "parent-thread");
+        assert.equal(thread?.sideChatPromotedAt, at);
+      }
+      for (const read of [
+        Option.getOrThrow(yield* query.getThreadShellById(id)),
+        Option.getOrThrow(yield* query.getThreadDetailById(id)),
+      ]) {
+        assert.equal(read.forkedFromThreadId, "parent-thread");
+      }
+      yield* sql`UPDATE projection_threads SET archived_at = ${at} WHERE thread_id = ${id}`;
+      assert.equal(
+        (yield* query.getArchivedShellSnapshot()).threads.find((t) => t.id === id)
+          ?.forkedFromThreadId,
+        "parent-thread",
+      );
+      yield* sql`DELETE FROM projection_threads WHERE thread_id = ${id}`;
+    }),
+  );
+
   it.effect("hydrates read model from projection tables and computes snapshot sequence", () =>
     Effect.gen(function* () {
       const snapshotQuery = yield* ProjectionSnapshotQuery;

@@ -221,6 +221,12 @@ export function applyThreadDetailEvent(
         },
       };
 
+    case "thread.goal-set":
+      return {
+        kind: "updated",
+        thread: { ...thread, goal: event.payload.goal },
+      };
+
     case "thread.pinned":
       return {
         kind: "updated",

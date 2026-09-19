@@ -34,81 +34,26 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  # This workflow only builds and publishes. fork-sync.yml owns merging
-  # upstream — it carries the version-pin resolution and the workflow allowlist
-  # a GITHUB_TOKEN push needs — and then calls this workflow with the exact
-  # main commit it pushed. A manual run here just packages main as it stands.
-  #
-  # Same rationale as upstream release.yml: node-pty has no Linux prebuilt,
-  # and the Windows package bundles a Linux pty.node for the WSL backend.
-  #
-  # OFF by default to save Actions minutes (owner, 2026-09-04): this job only
-  # runs when the repository variable FORK_WSL_PTY is exactly "true". Without
-  # it the Windows build still publishes; only the packaged app's WSL terminal
-  # backend is left out. To turn it back on (no commit needed):
-  #   gh variable set FORK_WSL_PTY --body true -R Simcity400/t3code-personal
-  # or GitHub → Settings → Secrets and variables → Actions → Variables.
-  # To turn it off again: gh variable delete FORK_WSL_PTY -R Simcity400/t3code-personal
-  build_wsl_node_pty:
-    name: Build WSL node-pty (linux-x64)
-    if: ${{ github.repository == 'Simcity400/t3code-personal' && vars.FORK_WSL_PTY == 'true' }}
-    runs-on: ubuntu-24.04
-    timeout-minutes: 15
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-        with:
-          ref: ${{ inputs.ref != '' && inputs.ref || github.sha }}
-          sparse-checkout: |
-            /*
-            !/.repos/
-          sparse-checkout-cone-mode: false
+  checks:
+    uses: ./.github/workflows/fork-checks.yml
+    with:
+      ref: ${{ inputs.ref || github.sha }}
 
-      - name: Setup Vite+
-        uses: voidzero-dev/setup-vp@v1
-        with:
-          node-version-file: package.json
-          cache: true
-          run-install: |
-            args:
-              - --filter=t3...
-
-      - name: Build node-pty linux-x64 prebuild
-        shell: bash
-        run: |
-          set -euo pipefail
-          pty_pkg="$(node -e "console.log(require.resolve('node-pty/package.json', { paths: ['$GITHUB_WORKSPACE/apps/server'] }))")"
-          pty_dir="$(dirname "$pty_pkg")"
-          ( cd "$pty_dir" && npx --yes node-gyp rebuild )
-          mkdir -p wsl-prebuild
-          cp "$pty_dir/build/Release/pty.node" wsl-prebuild/pty.node
-          file wsl-prebuild/pty.node
-
-      - name: Upload node-pty linux-x64 prebuild
-        uses: actions/upload-artifact@v7
-        with:
-          name: wsl-node-pty-x64
-          path: wsl-prebuild/pty.node
-          if-no-files-found: error
-
-  # One leg per CPU. Both run on the x64 runner: the build script cross-builds
-  # arm64 there (MSVC ARM64 toolset + Spectre libs, Rust aarch64 target, the
-  # node-pty win32-arm64 prebuild). Both architectures must succeed to publish.
   build:
     name: Build Windows ${{ matrix.arch }}
-    needs: [build_wsl_node_pty]
-    # Run whether the WSL job ran (success) or was switched off (skipped);
-    # a WSL job that actually failed still blocks the release as before.
-    if: ${{ github.repository == 'Simcity400/t3code-personal' && !cancelled() && (needs.build_wsl_node_pty.result == 'success' || needs.build_wsl_node_pty.result == 'skipped') }}
-    runs-on: windows-2025
+    needs: [checks]
+    if: github.repository == 'Simcity400/t3code-personal'
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
         include:
           - arch: x64
+            runner: windows-2025
             rust_target: x86_64-pc-windows-msvc
           - arch: arm64
+            runner: windows-11-arm
             rust_target: aarch64-pc-windows-msvc
     outputs:
       version: ${{ steps.release_meta.outputs.version }}
@@ -144,19 +89,6 @@ jobs:
               - --filter=t3...
               - --filter=@t3tools/scripts...
 
-      - name: Check fork update and agent invariants
-        if: matrix.arch == 'x64'
-        shell: bash
-        run: |
-          vp test run \
-            scripts/fork-sync.test.ts \
-            scripts/merge-update-manifests.test.ts \
-            apps/desktop/src/updates/windowsUpdateSelection.test.ts \
-            apps/desktop/src/electron/ElectronUpdater.windows.test.ts \
-            apps/server/src/provider/Layers/CodexSessionRuntime.test.ts \
-            packages/client-runtime/src/state/subagentRuntime.test.ts
-          vp test run scripts/build-desktop-artifact.test.ts -t "Windows|sidecar|ASAR"
-
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
         with:
@@ -176,29 +108,14 @@ jobs:
       - name: Align package versions to release version
         run: node scripts/update-release-package-versions.ts "${{ steps.release_meta.outputs.version }}"
 
-      # The WSL backend binary is Linux x64; only the x64 package bundles it.
-      - name: Download WSL node-pty prebuild
-        if: ${{ matrix.arch == 'x64' && needs.build_wsl_node_pty.result == 'success' }}
-        uses: actions/download-artifact@v8
-        with:
-          name: wsl-node-pty-x64
-          path: wsl-prebuild
-
       - name: Build desktop artifact
         shell: bash
         run: |
-          # --wsl-prebuild only when the (optional) WSL job produced one; the
-          # build script otherwise warns and packages without the WSL backend.
-          wsl_args=()
-          if [[ -f "$GITHUB_WORKSPACE/wsl-prebuild/pty.node" ]]; then
-            wsl_args=(--wsl-prebuild "$GITHUB_WORKSPACE/wsl-prebuild/pty.node")
-          fi
           vp run dist:desktop:artifact \
             --platform win \
             --target nsis \
             --arch ${{ matrix.arch }} \
             --build-version "${{ steps.release_meta.outputs.version }}" \
-            "${wsl_args[@]}" \
             --verbose
 
       - name: Collect release assets

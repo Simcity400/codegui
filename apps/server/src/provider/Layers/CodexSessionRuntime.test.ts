@@ -17,6 +17,7 @@ import {
   hasConfiguredMcpServer,
   isRecoverableThreadResumeError,
   makeMemoryConsolidationNotificationFilter,
+  makeCodexGoalRequests,
   openCodexThread,
   readCodexThread,
   rollbackCodexThread,
@@ -109,6 +110,53 @@ describe("Codex thread history", () => {
         threadId: "legacy-thread",
         turns: [],
       });
+    }),
+  );
+});
+
+describe("makeCodexGoalRequests", () => {
+  it.effect("targets the active provider thread with native Goal methods", () =>
+    Effect.gen(function* () {
+      const calls: Array<{ readonly method: string; readonly payload: unknown }> = [];
+      const goal = {
+        threadId: "provider-thread-42",
+        objective: "Ship Goal controls",
+        status: "active" as const,
+        tokensUsed: 0,
+        timeUsedSeconds: 0,
+        createdAt: 1_777_000_000,
+        updatedAt: 1_777_000_000,
+      };
+      const client = {
+        request: <M extends CodexRpc.ClientRequestMethod>(
+          method: M,
+          payload: CodexRpc.ClientRequestParamsByMethod[M],
+        ) => {
+          calls.push({ method, payload });
+          const response = method === "thread/goal/clear" ? { cleared: true } : { goal };
+          return Effect.succeed(response as CodexRpc.ClientRequestResponsesByMethod[M]);
+        },
+      };
+      const requests = makeCodexGoalRequests(client, Effect.succeed("provider-thread-42"));
+
+      yield* requests.setGoal({ objective: "Steer Goal", status: "paused", tokenBudget: 42 });
+      const snapshot = yield* requests.getGoal;
+      NodeAssert.deepStrictEqual(snapshot.goal, goal);
+      yield* requests.clearGoal;
+
+      NodeAssert.deepStrictEqual(calls, [
+        {
+          method: "thread/goal/set",
+          payload: {
+            threadId: "provider-thread-42",
+            objective: "Steer Goal",
+            status: "paused",
+            tokenBudget: 42,
+          },
+        },
+        { method: "thread/goal/get", payload: { threadId: "provider-thread-42" } },
+        { method: "thread/goal/clear", payload: { threadId: "provider-thread-42" } },
+      ]);
     }),
   );
 });
@@ -889,6 +937,34 @@ describe("isRecoverableThreadResumeError", () => {
 });
 
 describe("openCodexThread", () => {
+  it.effect("forks the parent conversation into a new native thread", () =>
+    Effect.gen(function* () {
+      const calls: Array<{ method: string; payload: unknown }> = [];
+      const opened = yield* openCodexThread({
+        client: {
+          request: () => Effect.die("A side chat must fork, not start blank"),
+          raw: {
+            request: (method, payload) => {
+              calls.push({ method, payload });
+              return Effect.succeed(makeThreadOpenResponse("child-thread"));
+            },
+          },
+        },
+        threadId: ThreadId.make("side-chat"),
+        runtimeMode: "full-access",
+        cwd: "/tmp/project",
+        requestedModel: undefined,
+        serviceTier: undefined,
+        resumeThreadId: undefined,
+        forkThreadId: "parent-thread",
+      });
+      NodeAssert.equal(opened.thread.id, "child-thread");
+      NodeAssert.equal(calls.length, 1);
+      NodeAssert.equal(calls[0]?.method, "thread/fork");
+      NodeAssert.equal((calls[0]?.payload as { threadId: string }).threadId, "parent-thread");
+    }),
+  );
+
   it.effect("resumes metadata when historical turns contain unknown error values", () =>
     Effect.gen(function* () {
       const response = makeThreadOpenResponse("saved-thread");
@@ -983,13 +1059,18 @@ describe("openCodexThread", () => {
 
   it.effect("falls back to thread/start when resume fails recoverably", () =>
     Effect.gen(function* () {
-      const calls: Array<{ method: "thread/start" | "thread/resume"; payload: unknown }> = [];
+      const calls: Array<{
+        method: "thread/start" | "thread/resume" | "thread/fork";
+        payload: unknown;
+      }> = [];
       const started = makeThreadOpenResponse("fresh-thread");
       const client = {
         raw: {
           request: (
-            method: "thread/resume",
-            payload: CodexRpc.ClientRequestParamsByMethod["thread/resume"],
+            method: "thread/resume" | "thread/fork",
+            payload:
+              | CodexRpc.ClientRequestParamsByMethod["thread/resume"]
+              | CodexRpc.ClientRequestParamsByMethod["thread/fork"],
           ) => {
             calls.push({ method, payload });
             return Effect.fail(

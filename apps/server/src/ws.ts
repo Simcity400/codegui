@@ -29,6 +29,8 @@ import {
   ClientSurface,
   ClientWebDeployment,
   CommandId,
+  type CodexGoalOperation,
+  CodexGoalOperationError,
   type DiscoveredLocalServerList,
   EventId,
   type EditorId,
@@ -214,6 +216,11 @@ function legacySetupFailureDescription(cause: unknown): string {
   return String(cause);
 }
 
+function codexGoalOperationError(operation: CodexGoalOperation, threadId: ThreadId) {
+  return (cause: unknown): CodexGoalOperationError =>
+    new CodexGoalOperationError({ operation, threadId, cause });
+}
+
 function projectEntriesFailureContext(error: WorkspaceEntries.WorkspaceEntriesError): {
   readonly failure: ProjectEntriesFailure;
   readonly normalizedCwd?: string;
@@ -346,7 +353,8 @@ export function isThreadDetailEvent(event: OrchestrationEvent): event is Extract
       | "thread.activity-appended"
       | "thread.turn-diff-completed"
       | "thread.reverted"
-      | "thread.session-set";
+      | "thread.session-set"
+      | "thread.goal-set";
   }
 > {
   return (
@@ -355,7 +363,8 @@ export function isThreadDetailEvent(event: OrchestrationEvent): event is Extract
     event.type === "thread.activity-appended" ||
     event.type === "thread.turn-diff-completed" ||
     event.type === "thread.reverted" ||
-    event.type === "thread.session-set"
+    event.type === "thread.session-set" ||
+    event.type === "thread.goal-set"
   );
 }
 
@@ -867,6 +876,9 @@ const makeWsRpcLayer = (
             );
           case "thread.unarchived":
             return threadUpsertOrRemove(ThreadId.make(event.aggregateId), event.sequence);
+          case "thread.goal-set":
+            // Goals are delivered on the thread detail subscription.
+            return Effect.succeed(Option.none());
           default:
             if (event.aggregateKind !== "thread") {
               return Effect.succeed(Option.none());
@@ -3397,6 +3409,22 @@ const makeWsRpcLayer = (
               ),
             ),
             { "rpc.aggregate": "terminal" },
+          ),
+        [WS_METHODS.codexGoalSet]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.codexGoalSet,
+            providerService
+              .setCodexGoal(input)
+              .pipe(Effect.mapError(codexGoalOperationError("set", input.threadId))),
+            { "rpc.aggregate": "codex-goal" },
+          ),
+        [WS_METHODS.codexGoalClear]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.codexGoalClear,
+            providerService
+              .clearCodexGoal(input.threadId)
+              .pipe(Effect.mapError(codexGoalOperationError("clear", input.threadId))),
+            { "rpc.aggregate": "codex-goal" },
           ),
         [WS_METHODS.previewOpen]: (input) =>
           observeRpcEffect(WS_METHODS.previewOpen, previewManager.open(input), {

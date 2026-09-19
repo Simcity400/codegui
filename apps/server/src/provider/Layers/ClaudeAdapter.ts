@@ -4465,8 +4465,10 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
       const resumeState = readClaudeResumeState(input.resumeCursor);
       const threadId = input.threadId;
       const existingResumeSessionId = resumeState?.resume;
-      const newSessionId = existingResumeSessionId === undefined ? yield* randomUUIDv4 : undefined;
-      const sessionId = existingResumeSessionId ?? newSessionId;
+      const isForkingSession = input.forkFromThreadId !== undefined;
+      const newSessionId =
+        existingResumeSessionId === undefined || isForkingSession ? yield* randomUUIDv4 : undefined;
+      const sessionId = isForkingSession ? newSessionId : (existingResumeSessionId ?? newSessionId);
 
       const runtimeContext = yield* Effect.context<never>();
       const runFork = Effect.runForkWith(runtimeContext);
@@ -4990,7 +4992,9 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
         ...(Object.keys(settings).length > 0 ? { settings } : {}),
         ...(existingResumeSessionId ? { resume: existingResumeSessionId } : {}),
         ...(newSessionId ? { sessionId: newSessionId } : {}),
+        ...(isForkingSession ? { forkSession: true } : {}),
         includePartialMessages: true,
+        forwardSubagentText: true,
         canUseTool,
         onUserDialog,
         supportedDialogKinds: ["resume_return"],

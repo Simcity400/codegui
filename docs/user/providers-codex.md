@@ -4,6 +4,15 @@ For one account, use the default Codex provider with your normal Codex login.
 [Provider setup](./install.md#providers) covers installation, Settings > Providers,
 and custom binaries or environment variables.
 
+## Goals
+
+After starting a Codex conversation, send `/goal` to edit its objective and optional
+token budget, or `/goal your objective` to set it directly. The goal controls show
+status, token usage, and elapsed time on web, desktop, and mobile. Pause, resume,
+or clear the goal there, or use `/goal pause`, `/goal resume`, and `/goal clear`.
+Goals remain visible after reconnecting. Managing a stopped thread's goal resumes
+its Codex session, and resuming an active goal can continue its work.
+
 ## Use multiple accounts
 
 A shared Codex home with a shadow home lets work and personal accounts continue

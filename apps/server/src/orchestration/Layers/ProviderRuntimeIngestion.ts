@@ -1,3 +1,6 @@
+import { type CodexGoal, type OrchestrationThreadGoal } from "@t3tools/contracts";
+import { ProjectionThreadRepository } from "../../persistence/Services/ProjectionThreads.ts";
+import { ProjectionThreadRepositoryLive } from "../../persistence/Layers/ProjectionThreads.ts";
 import {
   ApprovalRequestId,
   CommandId,
@@ -1014,10 +1017,25 @@ export function runtimeEventToActivities(
   return [];
 }
 
+function sameCodexGoalRecord(current: CodexGoal, next: CodexGoal): boolean {
+  return (
+    current.objective === next.objective &&
+    current.status === next.status &&
+    (current.tokenBudget ?? null) === (next.tokenBudget ?? null) &&
+    current.tokensUsed === next.tokensUsed &&
+    current.timeUsedSeconds === next.timeUsedSeconds &&
+    current.createdAt === next.createdAt &&
+    current.updatedAt === next.updatedAt
+  );
+}
+
 const make = Effect.gen(function* () {
   const threadBackgroundLiveness = yield* ThreadBackgroundLivenessService;
   const threadPlanProgress = yield* ThreadPlanProgressService;
   const crypto = yield* Crypto.Crypto;
+  const projectionThreads = yield* ProjectionThreadRepository.pipe(
+    Effect.provide(ProjectionThreadRepositoryLive),
+  );
   const orchestrationEngine = yield* OrchestrationEngineService;
   const projectionSnapshotQuery = yield* ProjectionSnapshotQuery;
   const providerService = yield* ProviderService;
@@ -1766,6 +1784,44 @@ const make = Effect.gen(function* () {
 
       const thread = yield* resolveThreadRuntimeContext(event.threadId);
       if (!thread) return;
+
+      if (event.type === "thread.goal.updated" || event.type === "thread.goal.cleared") {
+        // A child agent's goal is its own; only the root thread's goal is
+        // projected onto the T3 thread.
+        // One row read, not a thread detail load: only the projected goal is
+        // needed here, and the rest of ingestion no longer hydrates the thread.
+        const currentGoal =
+          Option.getOrUndefined(yield* projectionThreads.getById({ threadId: thread.id }))?.goal ??
+          null;
+        let nextGoal: OrchestrationThreadGoal | null = null;
+        if (event.type === "thread.goal.updated") {
+          const record = event.payload.goal;
+          // Codex re-sends the goal snapshot on every resume; an unchanged
+          // record is not a new event.
+          if (currentGoal !== null && sameCodexGoalRecord(currentGoal, record)) return;
+          // A usage refresh without a turn keeps pointing at the turn that
+          // set the current status, so a stalled goal keeps its explanation.
+          const eventTurnId = toTurnId(event.turnId) ?? null;
+          nextGoal = {
+            ...record,
+            turnId:
+              eventTurnId ??
+              (currentGoal !== null && currentGoal.status === record.status
+                ? currentGoal.turnId
+                : null),
+          };
+        } else if (currentGoal === null) {
+          return;
+        }
+        yield* orchestrationEngine.dispatch({
+          type: "thread.goal.set",
+          commandId: yield* providerCommandId(event, "thread-goal-set"),
+          threadId: thread.id,
+          goal: nextGoal,
+          createdAt: event.createdAt,
+        });
+        return;
+      }
 
       const now = event.createdAt;
       const eventTurnId = toTurnId(event.turnId);

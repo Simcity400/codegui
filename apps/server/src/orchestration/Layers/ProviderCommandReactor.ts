@@ -713,6 +713,9 @@ const make = Effect.gen(function* () {
           threadId,
           ...(preferredProvider ? { provider: preferredProvider } : {}),
           providerInstanceId: desiredInstanceId,
+          ...(thread.forkedFromThreadId != null
+            ? { forkFromThreadId: thread.forkedFromThreadId }
+            : {}),
           ...(effectiveCwd ? { cwd: effectiveCwd } : {}),
           ...(thread.title ? { title: thread.title } : {}),
           modelSelection: desiredModelSelection,

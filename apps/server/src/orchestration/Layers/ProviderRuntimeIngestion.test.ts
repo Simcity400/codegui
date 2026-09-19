@@ -147,6 +147,8 @@ function createProviderServiceHarness() {
       });
     },
     rollbackConversation: () => unsupported(),
+    setCodexGoal: () => Effect.die("Goal mutation is not stubbed in this test"),
+    clearCodexGoal: () => Effect.die("Goal mutation is not stubbed in this test"),
     uploadFeedback: () => unsupported(),
     get streamEvents() {
       return Stream.fromPubSub(runtimeEventPubSub).pipe(
@@ -440,6 +442,97 @@ describe("ProviderRuntimeIngestion", () => {
     };
   }
 
+  it("projects native goal notifications onto the thread and drops repeated snapshots", async () => {
+    const harness = await createHarness();
+    const goal = {
+      objective: "Ship the release",
+      status: "active" as "active" | "blocked",
+      tokenBudget: null,
+      tokensUsed: 1_000,
+      timeUsedSeconds: 30,
+      createdAt: 1_788_588_115,
+      updatedAt: 1_788_588_145,
+    };
+    const goalEvent = (eventId: string, patch: Partial<typeof goal>, turnId?: string) => ({
+      type: "thread.goal.updated" as const,
+      eventId: asEventId(eventId),
+      provider: ProviderDriverKind.make("codex"),
+      createdAt: "2026-01-01T00:00:01.000Z",
+      threadId: asThreadId("thread-1"),
+      ...(turnId ? { turnId: asTurnId(turnId) } : {}),
+      payload: { goal: { ...goal, ...patch } },
+    });
+
+    await harness.emitAndDrain([goalEvent("evt-goal-created", {})]);
+    const afterCreate = await harness.readModel();
+    expect(afterCreate.threads[0]?.goal).toEqual({ ...goal, turnId: null });
+    // The thread's recency is provider-turn driven, never goal bookkeeping.
+    expect(afterCreate.threads[0]?.updatedAt).toBe("2026-01-01T00:00:00.000Z");
+
+    // Codex re-sends the current goal on every resume; nothing to record.
+    await harness.emitAndDrain([goalEvent("evt-goal-resume-snapshot", {})]);
+    expect((await harness.readModel()).snapshotSequence).toBe(afterCreate.snapshotSequence);
+
+    await harness.emitAndDrain([
+      goalEvent(
+        "evt-goal-blocked",
+        { status: "blocked", tokensUsed: 5_000, updatedAt: 1_788_588_245 },
+        "turn-blocked",
+      ),
+    ]);
+    const afterBlock = await harness.readModel();
+    expect(afterBlock.threads[0]?.goal?.status).toBe("blocked");
+    expect(afterBlock.threads[0]?.goal?.turnId).toBe("turn-blocked");
+
+    // A refresh that Codex does not tie to a turn keeps pointing at the
+    // turn that stalled the goal, so its explanation survives a resume.
+    await harness.emitAndDrain([
+      goalEvent("evt-goal-usage", {
+        status: "blocked",
+        tokensUsed: 6_000,
+        updatedAt: 1_788_588_300,
+      }),
+    ]);
+    const afterRefresh = await harness.readModel();
+    expect(afterRefresh.threads[0]?.goal?.tokensUsed).toBe(6_000);
+    expect(afterRefresh.threads[0]?.goal?.turnId).toBe("turn-blocked");
+
+    // A status change without a turn (the user resumed) drops it.
+    await harness.emitAndDrain([
+      goalEvent("evt-goal-resumed", {
+        status: "active",
+        tokensUsed: 6_000,
+        updatedAt: 1_788_588_400,
+      }),
+    ]);
+    expect((await harness.readModel()).threads[0]?.goal?.turnId).toBeNull();
+
+    await harness.emitAndDrain([
+      {
+        type: "thread.goal.cleared",
+        eventId: asEventId("evt-goal-cleared"),
+        provider: ProviderDriverKind.make("codex"),
+        createdAt: "2026-01-01T00:00:02.000Z",
+        threadId: asThreadId("thread-1"),
+        payload: {},
+      },
+    ]);
+    const afterClear = await harness.readModel();
+    expect(afterClear.threads[0]?.goal ?? null).toBeNull();
+
+    // A goalless thread resumes with a cleared snapshot too.
+    await harness.emitAndDrain([
+      {
+        type: "thread.goal.cleared",
+        eventId: asEventId("evt-goal-cleared-again"),
+        provider: ProviderDriverKind.make("codex"),
+        createdAt: "2026-01-01T00:00:03.000Z",
+        threadId: asThreadId("thread-1"),
+        payload: {},
+      },
+    ]);
+    expect((await harness.readModel()).snapshotSequence).toBe(afterClear.snapshotSequence);
+  });
   it("maps turn started/completed events into thread session updates", async () => {
     const harness = await createHarness();
     const now = "2026-01-01T00:00:00.000Z";

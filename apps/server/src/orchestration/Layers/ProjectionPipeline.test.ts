@@ -4808,4 +4808,62 @@ engineLayer("OrchestrationProjectionPipeline via engine dispatch", (it) => {
       );
     }),
   );
+  it.effect("persists goal updates and clearing without moving the thread in the sidebar", () =>
+    Effect.gen(function* () {
+      const engine = yield* OrchestrationEngineService;
+      const query = yield* ProjectionSnapshotQuery;
+      const sql = yield* SqlClient.SqlClient;
+      const at = "2026-01-01T00:00:00.000Z";
+      const projectId = ProjectId.make("goal-project");
+      const threadId = ThreadId.make("goal-thread");
+      yield* engine.dispatch({
+        type: "project.create",
+        commandId: CommandId.make("goal-project"),
+        projectId,
+        title: "Goals",
+        workspaceRoot: "/tmp/goals",
+        defaultModelSelection: null,
+        createdAt: at,
+      });
+      yield* engine.dispatch({
+        type: "thread.create",
+        commandId: CommandId.make("goal-thread"),
+        threadId,
+        projectId,
+        title: "Goal",
+        modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5.4" },
+        interactionMode: "default",
+        runtimeMode: "full-access",
+        branch: null,
+        worktreePath: null,
+        createdAt: at,
+      });
+      const goal = {
+        objective: "Ship the fix",
+        status: "active" as const,
+        tokenBudget: 1000,
+        tokensUsed: 5,
+        timeUsedSeconds: 2,
+        createdAt: 1,
+        updatedAt: 2,
+        turnId: null,
+      };
+      for (const [index, value] of [goal, { ...goal, status: "paused" as const }, null].entries()) {
+        yield* engine.dispatch({
+          type: "thread.goal.set",
+          commandId: CommandId.make(`goal-${index}`),
+          threadId,
+          goal: value,
+          createdAt: "2026-01-01T00:01:00.000Z",
+        });
+        const detail = yield* query.getThreadDetailById(threadId);
+        assert.isTrue(Option.isSome(detail));
+        if (Option.isSome(detail)) assert.deepEqual(detail.value.goal ?? null, value);
+        assert.deepEqual(
+          yield* sql`SELECT updated_at FROM projection_threads WHERE thread_id = ${threadId}`,
+          [{ updated_at: at }],
+        );
+      }
+    }),
+  );
 });

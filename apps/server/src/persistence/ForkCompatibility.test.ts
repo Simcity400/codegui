@@ -15,6 +15,7 @@ layer("fork compatibility", (it) => {
       const columns = yield* sql<{ name: string }>`PRAGMA table_info(projection_threads)`;
       assert.isTrue(columns.some((column) => column.name === "forked_from_thread_id"));
       assert.isTrue(columns.some((column) => column.name === "side_chat_promoted_at"));
+      assert.isTrue(columns.some((column) => column.name === "goal_json"));
       assert.deepEqual(yield* runMigrations(), []);
     }),
   );

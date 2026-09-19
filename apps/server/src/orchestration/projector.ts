@@ -1,3 +1,4 @@
+import { ThreadGoalSetPayload } from "@t3tools/contracts";
 import type {
   OrchestrationEvent,
   OrchestrationProject,
@@ -1045,6 +1046,16 @@ export function projectEvent(
             }),
           };
         }),
+      );
+
+    case "thread.goal-set":
+      return decodeForEvent(ThreadGoalSetPayload, event.payload, event.type, "payload").pipe(
+        Effect.map((payload) => ({
+          ...nextBase,
+          threads: updateThread(nextBase.threads, payload.threadId, {
+            goal: payload.goal,
+          }),
+        })),
       );
 
     case "thread.activity-appended":

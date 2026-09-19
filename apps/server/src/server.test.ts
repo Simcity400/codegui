@@ -803,6 +803,8 @@ const buildAppUnderTest = (options?: {
             ...options?.layers?.providerRegistry,
           }),
           Layer.mock(ProviderService.ProviderService)({
+            setCodexGoal: () => Effect.die("Goal mutation is not stubbed in this test"),
+            clearCodexGoal: () => Effect.die("Goal mutation is not stubbed in this test"),
             uploadFeedback: () => Effect.die("Provider feedback is not stubbed in this test"),
             ...options?.layers?.providerService,
           }),
@@ -5858,6 +5860,8 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       yield* buildAppUnderTest({
         layers: {
           providerService: {
+            setCodexGoal: () => Effect.die("Goal mutation is not stubbed in this test"),
+            clearCodexGoal: () => Effect.die("Goal mutation is not stubbed in this test"),
             uploadFeedback: () =>
               Effect.fail(
                 new ProviderAdapterRequestError({

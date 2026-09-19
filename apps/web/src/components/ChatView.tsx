@@ -1,3 +1,4 @@
+import { useCodexGoalControls } from "./chat/useCodexGoalControls";
 import { useLoadBalancedEnvironment } from "../hooks/useLoadBalancedEnvironment";
 import { useSideChatCreation } from "./chat/useSideChatCreation";
 import { parseSideChatSlashCommand } from "@t3tools/shared/composerTrigger";
@@ -2945,6 +2946,8 @@ export default function ChatView(props: ChatViewProps) {
   const supportsConversationRollback =
     conversationProviderStatus !== null &&
     conversationProviderStatus.supportsConversationRollback !== false;
+  const codexGoal =
+    isServerThread && selectedProvider === "codex" ? (activeThread?.goal ?? null) : null;
   const phase = derivePhase(activeThread?.session ?? null);
   const threadActivities = activeThread?.activities ?? EMPTY_ACTIVITIES;
   const latestCheckpointCompletedAt = activeThread?.checkpoints.at(-1)?.completedAt ?? null;
@@ -6523,6 +6526,21 @@ export default function ChatView(props: ChatViewProps) {
     resumeCompactionPermanentlyDismissed,
     selectedProvider,
   ]);
+  const {
+    goalCommandRunning,
+    goalCommandsInFlightRef,
+    codexGoalBannerItem,
+    handleGoalCommand,
+    dialogs: codexGoalDialogs,
+  } = useCodexGoalControls({
+    environmentId,
+    routeThreadKey,
+    activeThreadKey,
+    activeThreadId,
+    isServerThread,
+    session: activeThread?.session,
+    codexGoal,
+  });
   const handleRestoreThreadBranch = useCallback(() => {
     if (gitStatusQuery.data?.hasWorkingTreeChanges) {
       setBranchRestoreConfirmOpen(true);
@@ -6551,6 +6569,7 @@ export default function ChatView(props: ChatViewProps) {
     const resumeCompactionItems =
       resumeCompactionBannerItem === null ? [] : [resumeCompactionBannerItem];
     const wokeThreadItems = wokeThreadBannerItem === null ? [] : [wokeThreadBannerItem];
+    const codexGoalItems = codexGoalBannerItem === null ? [] : [codexGoalBannerItem];
     const parkedThreadItems = parkedThreadBannerItem === null ? [] : [parkedThreadBannerItem];
     // The user asked for this one, so it leads the notice tier instead of trailing it.
     const usageLimitsItems = usageLimitsBanner === null ? [] : [usageLimitsBanner];
@@ -6565,6 +6584,7 @@ export default function ChatView(props: ChatViewProps) {
         ...resumeCompactionItems,
         ...wokeThreadItems,
         ...parkedThreadItems,
+        ...codexGoalItems,
       ];
     }
     return [
@@ -6614,10 +6634,12 @@ export default function ChatView(props: ChatViewProps) {
         },
       },
       ...parkedThreadItems,
+      ...codexGoalItems,
     ];
   }, [
     activeBranchMismatchKey,
     backgroundLivenessBannerItem,
+    codexGoalBannerItem,
     feedbackBannerItems,
     handleRestoreThreadBranch,
     isRestoringThreadBranch,
@@ -7379,7 +7401,8 @@ export default function ChatView(props: ChatViewProps) {
       !clientSettingsHydrated ||
       threadDetailLoading ||
       sendInFlightRef.current ||
-      feedbackUploadsInFlightRef.current.has(routeThreadKey)
+      feedbackUploadsInFlightRef.current.has(routeThreadKey) ||
+      goalCommandsInFlightRef.current.has(routeThreadKey)
     ) {
       notifyDirectAnnotationAttached();
       return;
@@ -7558,15 +7581,28 @@ export default function ChatView(props: ChatViewProps) {
       }
       return;
     }
-    const feedbackCommand =
+    const isUnadornedCodexCommand =
+      !directAnnotation &&
       ctxSelectedProvider === "codex" &&
       composerImages.length === 0 &&
       composerFiles.length === 0 &&
       sendableComposerTerminalContexts.length === 0 &&
       composerPreviewAnnotations.length === 0 &&
-      composerReviewComments.length === 0
-        ? parseCodexFeedbackCommand(trimmed)
-        : null;
+      composerReviewComments.length === 0;
+    const feedbackCommand = isUnadornedCodexCommand ? parseCodexFeedbackCommand(trimmed) : null;
+    const goalCommandResult =
+      isUnadornedCodexCommand && !queuedMessage && multipleModelSelections === null
+        ? handleGoalCommand(trimmed, () => {
+            if (promptRef.current !== promptForSend) return;
+            promptRef.current = "";
+            clearComposerDraftContent(composerDraftTarget);
+            composerRef.current?.resetCursorState();
+          })
+        : false;
+    if (goalCommandResult !== false) {
+      await goalCommandResult;
+      return;
+    }
     if (feedbackCommand && !queuedMessage && multipleModelSelections === null) {
       if (!isServerThread || activeThread.session === null) {
         toastManager.add(
@@ -10224,18 +10260,20 @@ export default function ChatView(props: ChatViewProps) {
                             projectSelectionRequired={isLocalDraftThread && activeProject === null}
                             phase={phase}
                             isConnecting={isConnecting}
-                            isSendBusy={isSendBusy}
+                            isSendBusy={isSendBusy || goalCommandRunning}
                             isRevertingCheckpoint={isRevertingCheckpoint}
                             sendDisabledReason={
-                              isRevertingCheckpoint
-                                ? "Rewinding conversation"
-                                : feedbackUploading
-                                  ? "Sending feedback"
-                                  : threadDetailLoading
-                                    ? "Messages loading"
-                                    : worktreeSetupBlocksSend
-                                      ? "Preparing worktree"
-                                      : projectCloneSendBlockReason
+                              goalCommandRunning
+                                ? "Running Goal command"
+                                : isRevertingCheckpoint
+                                  ? "Rewinding conversation"
+                                  : feedbackUploading
+                                    ? "Sending feedback"
+                                    : threadDetailLoading
+                                      ? "Messages loading"
+                                      : worktreeSetupBlocksSend
+                                        ? "Preparing worktree"
+                                        : projectCloneSendBlockReason
                             }
                             isPreparingWorktree={isPreparingWorktree}
                             bannerItems={composerBannerItems}
@@ -10430,6 +10468,8 @@ export default function ChatView(props: ChatViewProps) {
                 </AlertDialogFooter>
               </AlertDialogPopup>
             </AlertDialog>
+
+            {codexGoalDialogs}
 
             {pullRequestDialogState ? (
               <PullRequestThreadDialog
