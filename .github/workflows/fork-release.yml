@@ -1,0 +1,315 @@
+name: Fork Release
+
+# Fork-only pipeline: builds unsigned Windows installers (x64 and arm64) and
+# publishes them as one GitHub prerelease on this repository. Packaged apps
+# point their electron-updater feed here (GITHUB_REPOSITORY at build time), so
+# the in-app update button picks these releases up; the merged update manifest
+# lists both installers; the desktop adapter selects the native host CPU
+# architecture before electron-updater caches or downloads the update. Kept separate from upstream's release.yml to avoid merge
+# conflicts; that workflow needs T3's own secrets and runners and cannot run
+# on this fork.
+
+# Every direct push to main publishes the personal Windows build so the one
+# installed app follows the same branch as mobile OTA and source checkouts.
+# Markdown-only pushes do not spend a build. Workflow changes are release-relevant. workflow_dispatch remains available for a manual rebuild.
+on:
+  push:
+    branches:
+      - main
+    paths-ignore:
+      - "**.md"
+  workflow_call:
+    inputs:
+      ref:
+        description: Exact main commit to package
+        required: true
+        type: string
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fork-release
+  cancel-in-progress: false
+
+jobs:
+  # This workflow only builds and publishes. fork-sync.yml owns merging
+  # upstream — it carries the version-pin resolution and the workflow allowlist
+  # a GITHUB_TOKEN push needs — and then calls this workflow with the exact
+  # main commit it pushed. A manual run here just packages main as it stands.
+  #
+  # Same rationale as upstream release.yml: node-pty has no Linux prebuilt,
+  # and the Windows package bundles a Linux pty.node for the WSL backend.
+  #
+  # OFF by default to save Actions minutes (owner, 2026-09-04): this job only
+  # runs when the repository variable FORK_WSL_PTY is exactly "true". Without
+  # it the Windows build still publishes; only the packaged app's WSL terminal
+  # backend is left out. To turn it back on (no commit needed):
+  #   gh variable set FORK_WSL_PTY --body true -R Simcity400/t3code-personal
+  # or GitHub → Settings → Secrets and variables → Actions → Variables.
+  # To turn it off again: gh variable delete FORK_WSL_PTY -R Simcity400/t3code-personal
+  build_wsl_node_pty:
+    name: Build WSL node-pty (linux-x64)
+    if: ${{ github.repository == 'Simcity400/t3code-personal' && vars.FORK_WSL_PTY == 'true' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.ref != '' && inputs.ref || github.sha }}
+          sparse-checkout: |
+            /*
+            !/.repos/
+          sparse-checkout-cone-mode: false
+
+      - name: Setup Vite+
+        uses: voidzero-dev/setup-vp@v1
+        with:
+          node-version-file: package.json
+          cache: true
+          run-install: |
+            args:
+              - --filter=t3...
+
+      - name: Build node-pty linux-x64 prebuild
+        shell: bash
+        run: |
+          set -euo pipefail
+          pty_pkg="$(node -e "console.log(require.resolve('node-pty/package.json', { paths: ['$GITHUB_WORKSPACE/apps/server'] }))")"
+          pty_dir="$(dirname "$pty_pkg")"
+          ( cd "$pty_dir" && npx --yes node-gyp rebuild )
+          mkdir -p wsl-prebuild
+          cp "$pty_dir/build/Release/pty.node" wsl-prebuild/pty.node
+          file wsl-prebuild/pty.node
+
+      - name: Upload node-pty linux-x64 prebuild
+        uses: actions/upload-artifact@v7
+        with:
+          name: wsl-node-pty-x64
+          path: wsl-prebuild/pty.node
+          if-no-files-found: error
+
+  # One leg per CPU. Both run on the x64 runner: the build script cross-builds
+  # arm64 there (MSVC ARM64 toolset + Spectre libs, Rust aarch64 target, the
+  # node-pty win32-arm64 prebuild). Both architectures must succeed to publish.
+  build:
+    name: Build Windows ${{ matrix.arch }}
+    needs: [build_wsl_node_pty]
+    # Run whether the WSL job ran (success) or was switched off (skipped);
+    # a WSL job that actually failed still blocks the release as before.
+    if: ${{ github.repository == 'Simcity400/t3code-personal' && !cancelled() && (needs.build_wsl_node_pty.result == 'success' || needs.build_wsl_node_pty.result == 'skipped') }}
+    runs-on: windows-2025
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x64
+            rust_target: x86_64-pc-windows-msvc
+          - arch: arm64
+            rust_target: aarch64-pc-windows-msvc
+    outputs:
+      version: ${{ steps.release_meta.outputs.version }}
+      tag: ${{ steps.release_meta.outputs.tag }}
+      name: ${{ steps.release_meta.outputs.name }}
+    env:
+      # T3 Connect public build config (same values as .env). These are the
+      # public client-side values shipped inside the official T3 Code build —
+      # not credentials. Without them, builds disable T3 Connect entirely
+      # (no sign-in, no relay device connections).
+      T3CODE_CLERK_PUBLISHABLE_KEY: pk_live_Y2xlcmsudDMuY29kZXMk
+      T3CODE_CLERK_JWT_TEMPLATE: t3-relay
+      T3CODE_CLERK_CLI_OAUTH_CLIENT_ID: hzxSgY2cH10sDU2r
+      T3CODE_RELAY_URL: https://relay.t3.codes
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.ref != '' && inputs.ref || github.sha }}
+          sparse-checkout: |
+            /*
+            !/.repos/
+          sparse-checkout-cone-mode: false
+
+      - name: Setup Vite+
+        uses: voidzero-dev/setup-vp@v1
+        with:
+          node-version-file: package.json
+          cache: true
+          run-install: |
+            args:
+              - --filter=@t3tools/desktop...
+              - --filter=t3...
+              - --filter=@t3tools/scripts...
+
+      - name: Check fork update and agent invariants
+        if: matrix.arch == 'x64'
+        shell: bash
+        run: |
+          vp test run \
+            scripts/fork-sync.test.ts \
+            scripts/merge-update-manifests.test.ts \
+            apps/desktop/src/updates/windowsUpdateSelection.test.ts \
+            apps/desktop/src/electron/ElectronUpdater.windows.test.ts \
+            apps/server/src/provider/Layers/CodexSessionRuntime.test.ts \
+            packages/client-runtime/src/state/subagentRuntime.test.ts
+          vp test run scripts/build-desktop-artifact.test.ts -t "Windows|sidecar|ASAR"
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.rust_target }}
+
+      - id: release_meta
+        name: Resolve fork nightly version
+        shell: bash
+        run: |
+          nightly_date="$(date -u +%Y%m%d)"
+          node scripts/resolve-nightly-release.ts \
+            --date "$nightly_date" \
+            --run-number "${{ github.run_id }}" \
+            --sha "$(git rev-parse HEAD)" \
+            --github-output
+
+      - name: Align package versions to release version
+        run: node scripts/update-release-package-versions.ts "${{ steps.release_meta.outputs.version }}"
+
+      # The WSL backend binary is Linux x64; only the x64 package bundles it.
+      - name: Download WSL node-pty prebuild
+        if: ${{ matrix.arch == 'x64' && needs.build_wsl_node_pty.result == 'success' }}
+        uses: actions/download-artifact@v8
+        with:
+          name: wsl-node-pty-x64
+          path: wsl-prebuild
+
+      - name: Build desktop artifact
+        shell: bash
+        run: |
+          # --wsl-prebuild only when the (optional) WSL job produced one; the
+          # build script otherwise warns and packages without the WSL backend.
+          wsl_args=()
+          if [[ -f "$GITHUB_WORKSPACE/wsl-prebuild/pty.node" ]]; then
+            wsl_args=(--wsl-prebuild "$GITHUB_WORKSPACE/wsl-prebuild/pty.node")
+          fi
+          vp run dist:desktop:artifact \
+            --platform win \
+            --target nsis \
+            --arch ${{ matrix.arch }} \
+            --build-version "${{ steps.release_meta.outputs.version }}" \
+            "${wsl_args[@]}" \
+            --verbose
+
+      - name: Collect release assets
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p release-publish
+
+          shopt -s nullglob
+          for pattern in \
+            "release/*.exe" \
+            "release/*.blockmap"; do
+            for asset in $pattern; do
+              cp "$asset" release-publish/
+            done
+          done
+
+          # Each leg writes its own nightly.yml. Park it under an arch suffix
+          # so the publish job can merge both into one manifest.
+          if [[ ! -f release/nightly.yml ]]; then
+            echo "Missing release/nightly.yml" >&2
+            exit 1
+          fi
+          cp release/nightly.yml "release-publish/nightly-${{ matrix.arch }}.yml"
+
+          ls -la release-publish
+
+      - name: Upload desktop artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: desktop-win-${{ matrix.arch }}
+          path: release-publish/*
+          if-no-files-found: error
+          retention-days: 3
+
+  publish:
+    name: Publish release
+    needs: [build]
+    if: ${{ !cancelled() && needs.build.result == 'success' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.ref != '' && inputs.ref || github.sha }}
+          sparse-checkout: |
+            /*
+            !/.repos/
+          sparse-checkout-cone-mode: false
+
+      - name: Setup Vite+
+        uses: voidzero-dev/setup-vp@v1
+        with:
+          node-version-file: package.json
+          cache: true
+          run-install: |
+            args:
+              - --filter=@t3tools/scripts...
+
+      - name: Download desktop artifacts
+        uses: actions/download-artifact@v8
+        with:
+          pattern: desktop-win-*
+          merge-multiple: true
+          path: release-publish
+
+      - name: Merge updater manifests
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd release-publish
+
+          if [[ ! -f nightly-x64.yml ]]; then
+            echo "Missing nightly-x64.yml: the x64 build is required" >&2
+            exit 1
+          fi
+
+          if [[ ! -f nightly-arm64.yml ]]; then
+            echo "Missing nightly-arm64.yml: both Windows architectures are required" >&2
+            exit 1
+          fi
+          node ../scripts/merge-update-manifests.ts --platform win nightly-x64.yml nightly-arm64.yml nightly.yml
+          rm -f nightly-x64.yml nightly-arm64.yml
+
+          # Keep the latest channel alias for existing personal installations.
+          cp nightly.yml latest.yml
+
+          cat nightly.yml
+          ls -la
+
+      - name: Upload draft release
+        id: upload
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.build.outputs.tag }}
+          target_commitish: ${{ inputs.ref != '' && inputs.ref || github.sha }}
+          name: ${{ needs.build.outputs.name }}
+          draft: true
+          # Publish only after both architectures and manifests are verified.
+          prerelease: false
+          make_latest: false
+          files: release-publish/*
+          fail_on_unmatched_files: true
+
+      - name: Verify assets and publish the complete release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_ID: ${{ steps.upload.outputs.id }}
+        run: |
+          node scripts/fork-sync.ts verify-release
+          gh api --method PATCH "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID" -F draft=false -F prerelease=true

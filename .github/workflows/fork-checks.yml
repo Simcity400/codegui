@@ -1,0 +1,85 @@
+name: Fork Checks
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fork-checks-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  secrets:
+    name: Scan application source for secrets
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+          # Vendored read-only upstream references contain cryptographic test
+          # fixtures. They are outside this application-source check.
+          sparse-checkout: |
+            /*
+            !/.repos/
+          sparse-checkout-cone-mode: false
+      - name: Install pinned Gitleaks
+        working-directory: ${{ runner.temp }}
+        run: |
+          curl --fail --silent --show-error --location \
+            https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_linux_x64.tar.gz \
+            --output gitleaks.tar.gz
+          echo '551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb  gitleaks.tar.gz' | sha256sum --check
+          tar -xzf gitleaks.tar.gz gitleaks
+      - name: Scan checked-out source
+        run: '"$RUNNER_TEMP/gitleaks" dir . --config .gitleaks.toml --redact --no-banner'
+
+  regressions:
+    name: Fork regression tests
+    runs-on: windows-2025
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+          sparse-checkout: |
+            /*
+            !/.repos/
+          sparse-checkout-cone-mode: false
+      - uses: voidzero-dev/setup-vp@v1
+        with:
+          node-version-file: package.json
+          cache: true
+          run-install: |
+            args:
+              - --filter=@t3tools/desktop...
+              - --filter=t3...
+              - --filter=@t3tools/scripts...
+      - name: Test release and update behavior
+        shell: bash
+        run: |
+          vp test run \
+            scripts/fork-sync.test.ts \
+            scripts/merge-update-manifests.test.ts \
+            apps/desktop/src/updates/DesktopUpdates.test.ts \
+            apps/desktop/src/updates/windowsUpdateSelection.test.ts \
+            apps/desktop/src/electron/ElectronUpdater.windows.test.ts \
+            apps/server/src/provider/Layers/CodexSessionRuntime.test.ts \
+            apps/server/src/notifications/ExpoPushAlerts.test.ts \
+            apps/server/src/relay/AgentAwarenessRelay.test.ts \
+            apps/server/src/auth/RpcAuthorization.test.ts \
+            scripts/lib/personal-expo-push-alerts.test.ts \
+            packages/contracts/src/codexGoal.test.ts \
+            apps/server/src/orchestration/projector.goal.test.ts \
+            apps/server/src/persistence/ForkCompatibility.test.ts \
+            apps/server/src/persistence/Layers/OrchestrationEventStore.test.ts \
+            apps/server/src/persistence/Layers/ProjectionThreadMessages.test.ts \
+            packages/client-runtime/src/state/subagentRuntime.test.ts \
+            packages/client-runtime/src/state/agentTranscripts.test.ts
+          vp test run scripts/build-desktop-artifact.test.ts -t "Windows|sidecar|ASAR"

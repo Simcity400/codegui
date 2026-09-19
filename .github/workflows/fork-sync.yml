@@ -1,0 +1,126 @@
+name: Fork Sync
+
+# Integrate published official nightlies centrally, then build the personal app.
+# Source versions stay upstream-owned; fork-upstream.json records progress.
+on:
+  schedule:
+    - cron: "7,22,37,52 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: fork-sync
+  cancel-in-progress: false
+
+jobs:
+  gate:
+    name: Check published nightlies and missing builds
+    if: github.repository == 'Simcity400/t3code-personal'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      tag: ${{ steps.check.outputs.tag }}
+      sync: ${{ steps.check.outputs.sync }}
+      release: ${{ steps.check.outputs.release }}
+      ref: ${{ steps.check.outputs.ref }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: main
+          sparse-checkout: |
+            /*
+            !/.repos/
+          sparse-checkout-cone-mode: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+      - id: check
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node scripts/fork-sync.ts check
+      # A hand-finished merge lands with the blocked tag already recorded, so no
+      # sync job runs to clear the marker; a current main clears it here instead.
+      - name: Clear the blocked-sync marker once main is current
+        if: steps.check.outputs.sync != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/needs-merge-help" >/dev/null 2>&1; then
+            gh api --method DELETE "repos/$GITHUB_REPOSITORY/git/refs/heads/needs-merge-help"
+          fi
+
+  sync:
+    name: Integrate the published official nightly
+    needs: gate
+    if: needs.gate.outputs.sync == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    outputs:
+      ref: ${{ steps.merge.outputs.ref }}
+    steps:
+      # A full clone on purpose: sparse-checkout makes this a blob-less partial
+      # clone whose promisor is origin, and merging the official tag then fails
+      # to lazily fetch upstream-only blobs ("not our ref"). The gate job can
+      # stay sparse because it never merges.
+      - uses: actions/checkout@v6
+        with:
+          ref: main
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+      - id: merge
+        env:
+          NIGHTLY_TAG: ${{ needs.gate.outputs.tag }}
+          FORK_SYNC_CONFLICTS_FILE: ${{ runner.temp }}/fork-sync-conflicts.json
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          node scripts/fork-sync.ts merge
+          git push origin HEAD:main
+      # The installed app reads this branch and stops showing the notice.
+      - name: Clear the blocked-sync marker
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/needs-merge-help" >/dev/null 2>&1; then
+            gh api --method DELETE "repos/$GITHUB_REPOSITORY/git/refs/heads/needs-merge-help"
+          fi
+      # A stopped merge raises the in-app notice; a conflict also names its files.
+      - name: Publish the blocked-sync marker
+        if: failure() && steps.merge.outcome == 'failure'
+        env:
+          NIGHTLY_TAG: ${{ needs.gate.outputs.tag }}
+          FORK_SYNC_CONFLICTS_FILE: ${{ runner.temp }}/fork-sync-conflicts.json
+          FORK_SYNC_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git merge --abort 2>/dev/null || true
+          git reset -q --hard origin/main && git clean -qfd
+          node scripts/fork-sync.ts mark-blocked
+          echo 'The official nightly could not be integrated. The installed app now shows the merge notice; the app keeps its last successful build.' >> "$GITHUB_STEP_SUMMARY"
+
+  release:
+    name: Publish the personal Windows update
+    needs: [gate, sync]
+    # Also retries a failed publish when the nightly was already integrated.
+    if: ${{ !cancelled() && needs.gate.result == 'success' && needs.gate.outputs.release == 'true' && (needs.sync.result == 'success' || needs.sync.result == 'skipped') }}
+    uses: ./.github/workflows/fork-release.yml
+    with:
+      ref: ${{ needs.sync.outputs.ref || needs.gate.outputs.ref }}
+    permissions:
+      contents: write
+
+  mobile:
+    name: Publish the synced iPhone update
+    needs: sync
+    # GITHUB_TOKEN pushes do not start push workflows, so call this explicitly.
+    uses: ./.github/workflows/fork-mobile-preview.yml
+    with:
+      ref: ${{ needs.sync.outputs.ref }}
+    secrets: inherit
+    permissions:
+      contents: read

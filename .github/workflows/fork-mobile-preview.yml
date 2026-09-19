@@ -1,0 +1,174 @@
+name: Personal iPhone Preview
+
+on:
+  workflow_dispatch:
+    inputs:
+      force:
+        description: Bypass the 48-hour Expo throttle and build anyway
+        required: false
+        default: false
+        type: boolean
+  # fork-sync.yml calls this after it pushes a merged main. A push made with
+  # GITHUB_TOKEN never fires `push` triggers, so without this entry the iPhone
+  # OTA silently stopped tracking main whenever the scheduled sync — rather
+  # than a human — was what moved it.
+  workflow_call:
+    inputs:
+      ref:
+        description: Exact main commit to publish
+        required: true
+        type: string
+      force:
+        description: Bypass the 48-hour Expo throttle and build anyway
+        required: false
+        default: false
+        type: boolean
+    secrets:
+      EXPO_TOKEN:
+        required: true
+  push:
+    branches: [main]
+    paths:
+      - apps/mobile/**
+      - packages/client-runtime/**
+      - packages/contracts/**
+      - packages/shared/**
+      - assets/**
+      - scripts/**
+      - patches/**
+      - pnpm-lock.yaml
+      - pnpm-workspace.yaml
+      - .github/workflows/fork-mobile-preview.yml
+
+# Keep updates in commit order. If several pushes arrive while an iOS build is
+# running, GitHub retains the newest queued run after the build finishes.
+concurrency:
+  group: personal-iphone-preview
+  cancel-in-progress: false
+
+jobs:
+  throttle:
+    name: Throttle to one Expo run per two days
+    if: github.repository == 'Simcity400/t3code-personal'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      proceed: ${{ steps.check.outputs.proceed }}
+    steps:
+      - id: check
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          FORCE: ${{ inputs.force && 'true' || '' }}
+        run: |
+          # Expo EAS builds are capped at 15/month, so run at most once per
+          # 48 hours. OTA-only fingerprint runs still go through `eas`, so
+          # gate the whole deploy job, not just native rebuilds. A manual
+          # dispatch with force=true bypasses the gate.
+          if [ "$FORCE" = "true" ]; then
+            echo "proceed=true" >> "$GITHUB_OUTPUT"
+            echo "Force run requested; bypassing the 48-hour throttle."
+            exit 0
+          fi
+          runs_json=$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/fork-mobile-preview.yml/runs?status=success&per_page=10")
+          last=$(echo "$runs_json" | jq -r --argjson self "$GITHUB_RUN_ID" '[.workflow_runs[] | select(.id != $self and .conclusion == "success")][0] | .updated_at // empty')
+          if [ -z "$last" ]; then
+            echo "proceed=true" >> "$GITHUB_OUTPUT"
+            echo "No prior successful run; proceeding."
+            exit 0
+          fi
+          cutoff=$(date -u -d '48 hours ago' +%s)
+          last_epoch=$(date -u -d "$last" +%s)
+          if [ "$last_epoch" -le "$cutoff" ]; then
+            echo "proceed=true" >> "$GITHUB_OUTPUT"
+            echo "Last successful run was $last (over 48h ago); proceeding."
+          else
+            echo "proceed=false" >> "$GITHUB_OUTPUT"
+            echo "Last successful run was $last (within 48h); skipping to preserve Expo build quota."
+          fi
+
+  deploy:
+    name: Build if needed, then publish
+    needs: throttle
+    if: github.repository == 'Simcity400/t3code-personal' && needs.throttle.outputs.proceed == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env:
+      APP_VARIANT: preview
+      MOBILE_VERSION_POLICY: fingerprint
+      T3CODE_EXPO_PUSH_ALERTS: "1"
+      NODE_OPTIONS: --max-old-space-size=8192
+    steps:
+      - name: Check Expo credentials
+        env:
+          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+        run: |
+          if [ -z "$EXPO_TOKEN" ]; then
+            echo "The EXPO_TOKEN repository secret is missing." >&2
+            exit 1
+          fi
+
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.ref != '' && inputs.ref || github.sha }}
+          fetch-depth: 0
+
+      - name: Setup Vite+
+        uses: voidzero-dev/setup-vp@v1
+        with:
+          node-version-file: package.json
+          cache: true
+          run-install: |
+            args:
+              - --filter=@t3tools/mobile...
+
+      - name: Test personal notification delivery setup
+        run: |
+          vp test run \
+            apps/mobile/src/connection/background-activity.test.ts \
+            apps/mobile/src/features/agent-awareness/capabilities.test.ts \
+            apps/mobile/src/features/agent-awareness/expoPushRegistration.test.ts \
+            apps/mobile/src/features/agent-awareness/notificationPresentation.test.ts \
+            apps/mobile/src/features/agent-awareness/remoteRegistration.test.ts \
+            apps/mobile/src/features/agent-awareness/notificationNavigation.test.ts \
+            apps/mobile/src/features/settings/SettingsRouteScreen.logic.test.ts \
+            scripts/lib/personal-expo-push-alerts.test.ts
+
+      - name: Expose pnpm
+        run: |
+          pnpm_version="$(node --print "require('./package.json').packageManager.split('@').pop()")"
+          vp_pnpm_bin="$HOME/.vite-plus/package_manager/pnpm/$pnpm_version/pnpm/bin"
+          echo "$vp_pnpm_bin" >> "$GITHUB_PATH"
+          "$vp_pnpm_bin/pnpm" --version
+
+      - name: Setup EAS
+        uses: expo/expo-github-action@v8
+        with:
+          eas-version: latest
+          # Setup's token validation prints the account email. Authenticate only
+          # the commands below, which already receive EXPO_TOKEN explicitly.
+          packager: npm
+
+      - name: Pull preview environment variables
+        working-directory: apps/mobile
+        env:
+          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+        run: eas env:pull preview --non-interactive
+
+      - name: Deploy only to a compatible iPhone runtime
+        id: deploy
+        uses: expo/expo-github-action/continuous-deploy-fingerprint@main
+        env:
+          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+        with:
+          profile: preview
+          branch: preview
+          platform: ios
+          environment: preview
+          working-directory: apps/mobile
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Report required native install
+        if: steps.deploy.outputs.ios-did-start-new-build == 'true'
+        run: echo 'Native inputs changed. Install the new iPhone preview build before expecting its over-the-air updates.' >> "$GITHUB_STEP_SUMMARY"
