@@ -281,6 +281,17 @@ export function familyPanelSection(node: AgentFamilyNode): SubagentPanelSection 
   return node.children.some((child) => familyPanelSection(child) === "active") ? "active" : "idle";
 }
 
+/** Keep the path to live descendants visible even when their ancestors have settled. */
+export function partitionAgentFamilies(nodes: ReadonlyArray<AgentFamilyNode>) {
+  const active: AgentFamilyNode[] = [];
+  const idle: AgentFamilyNode[] = [];
+  for (const node of nodes) {
+    (familyPanelSection(node) === "active" ? active : idle).push(node);
+  }
+  idle.sort((a, b) => compareSubagentsInSection("idle")(a.agent, b.agent));
+  return { active, idle };
+}
+
 /** Depth-first flattening for list renderers (mobile FlatList, counts). */
 export function flattenAgentFamily(node: AgentFamilyNode): ReadonlyArray<AgentFamilyNode> {
   return [node, ...node.children.flatMap(flattenAgentFamily)];

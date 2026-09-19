@@ -17,7 +17,7 @@ export {
 
 // Preserve each thread's disclosure choice when switching panel surfaces.
 export const idleAgentsOpenAtom = Atom.family((_threadKey: string | null) =>
-  Atom.make(true).pipe(Atom.keepAlive),
+  Atom.make(false).pipe(Atom.keepAlive),
 );
 // Finished background tasks are history: closed by default so live work stays in view.
 export const settledTasksOpenAtom = Atom.family((_threadKey: string | null) =>

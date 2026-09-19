@@ -6,15 +6,10 @@ import {
 } from "@t3tools/client-runtime/state/agent-transcripts";
 import {
   backgroundTaskTypeLabel,
-  buildAgentFamilies,
-  compareSubagentsInSection,
-  familyPanelSection,
-  flattenAgentFamily,
   formatSubagentElapsed,
   formatSubagentTitle,
   isSubagentSessionLive,
   subagentActivityText,
-  subagentPanelSection,
   subagentStatusLabel,
 } from "@t3tools/client-runtime/state/subagentPresentation";
 import {
@@ -48,6 +43,8 @@ import { useEnvironmentThread } from "../../state/threads";
 import { useProject } from "../../state/entities";
 import { ThreadFeed } from "../threads/ThreadFeed";
 import { projectThreadContentPresentation } from "../threads/threadContentPresentation";
+
+import { buildAgentListRows } from "./agentListRows";
 
 type ThreadParams = { readonly environmentId: string; readonly threadId: string };
 
@@ -232,87 +229,36 @@ const BackgroundTaskRow = memo(function BackgroundTaskRow(props: {
   );
 });
 
-type AgentListRow =
-  | {
-      readonly kind: "section";
-      readonly key: string;
-      readonly title: string;
-      readonly count: number;
-    }
-  | {
-      readonly kind: "agent";
-      readonly key: string;
-      readonly agent: RuntimeSubagent;
-      readonly depth: number;
-    }
-  | {
-      readonly kind: "task";
-      readonly key: string;
-      readonly task: RuntimeSubagent;
-      readonly depth: number;
-    };
-
-/**
- * The desktop panel's sections, flattened for one list: Active and Idle
- * agent families (each agent followed by what it launched, inset per level),
- * then the thread's own live and finished background tasks.
- */
-function buildAgentListRows(
-  agents: ReadonlyArray<RuntimeSubagent>,
-  backgroundTasks: ReadonlyArray<RuntimeSubagent>,
-): AgentListRow[] {
-  const rows: AgentListRow[] = [];
-  const { roots, unownedTasks } = buildAgentFamilies(agents, backgroundTasks);
-  for (const section of ["active", "idle"] as const) {
-    const compare = compareSubagentsInSection(section);
-    const families = roots
-      .filter((node) => familyPanelSection(node) === section)
-      .sort((a, b) => compare(a.agent, b.agent));
-    const nodes = families.flatMap(flattenAgentFamily);
-    const agentCount = nodes.filter((node) => node.agent.kind !== "background_task").length;
-    if (agentCount === 0) continue;
-    rows.push({
-      kind: "section",
-      key: `section:${section}`,
-      title: section === "active" ? "Active" : "Idle",
-      count: agentCount,
-    });
-    for (const node of nodes) {
-      rows.push(
-        node.agent.kind === "background_task"
-          ? { kind: "task", key: `task:${node.agent.id}`, task: node.agent, depth: node.depth }
-          : { kind: "agent", key: node.agent.id, agent: node.agent, depth: node.depth },
-      );
-    }
-  }
-  for (const section of ["active", "idle"] as const) {
-    const tasks = unownedTasks
-      .filter((task) => subagentPanelSection(task.status) === section)
-      .sort(compareSubagentsInSection(section));
-    if (tasks.length === 0) continue;
-    rows.push({
-      kind: "section",
-      key: `section:tasks:${section}`,
-      title: section === "active" ? "Background tasks" : "Finished tasks",
-      count: tasks.length,
-    });
-    for (const task of tasks) {
-      rows.push({ kind: "task", key: `task:${task.id}`, task, depth: 0 });
-    }
-  }
-  return rows;
-}
-
 export function ThreadAgentsRouteScreen(props: StaticScreenProps<ThreadParams>) {
   const navigation = useNavigation();
   const { environmentId, threadId, agents, backgroundTasks, presentation, loadEarlier } =
     useAgentThread(props.route.params);
   const insets = useSafeAreaInsets();
   const historyRequest = useRef<{ key: string | null; size: number }>({ key: null, size: 0 });
+  const [expandedSections, setExpandedSections] = useState<ReadonlySet<string>>(() => new Set());
+  const sectionScope = `${environmentId}:${threadId}:`;
   const rows = useMemo(
-    () => buildAgentListRows(agents, backgroundTasks),
-    [agents, backgroundTasks],
+    () =>
+      buildAgentListRows(
+        agents,
+        backgroundTasks,
+        new Set(
+          [...expandedSections]
+            .filter((key) => key.startsWith(sectionScope))
+            .map((key) => key.slice(sectionScope.length)),
+        ),
+      ),
+    [agents, backgroundTasks, expandedSections, sectionScope],
   );
+  const toggleSection = (key: string) => {
+    const scopedKey = `${sectionScope}${key}`;
+    setExpandedSections((previous) => {
+      const next = new Set(previous);
+      if (next.has(scopedKey)) next.delete(scopedKey);
+      else next.add(scopedKey);
+      return next;
+    });
+  };
   const rosterSize = agents.length + backgroundTasks.length;
   const openTranscript = useCallback(
     (agent: RuntimeSubagent) =>
@@ -342,13 +288,30 @@ export function ThreadAgentsRouteScreen(props: StaticScreenProps<ThreadParams>) 
       contentContainerStyle={{ padding: 16, paddingBottom: insets.bottom + 16, gap: 8 }}
       renderItem={({ item }) =>
         item.kind === "section" ? (
-          <View className="flex-row items-center gap-1.5 px-1 pt-2">
-            <BotIcon size={12} colorClassName="accent-icon-muted" />
+          <Pressable
+            disabled={item.expanded === undefined}
+            accessibilityRole={item.expanded === undefined ? "header" : "button"}
+            accessibilityState={
+              item.expanded === undefined ? undefined : { expanded: item.expanded }
+            }
+            onPress={() => toggleSection(item.key)}
+            className="flex-row items-center gap-1.5 px-1 py-2"
+            style={item.depth > 0 ? { marginLeft: item.depth * NEST_INSET } : undefined}
+          >
+            {item.expanded === undefined ? (
+              <BotIcon size={12} colorClassName="accent-icon-muted" />
+            ) : (
+              <SymbolView
+                name={item.expanded ? "chevron.down" : "chevron.right"}
+                size={12}
+                tintColorClassName="accent-icon-muted"
+              />
+            )}
             <Text className="text-2xs font-t3-medium uppercase tracking-wider text-foreground-muted">
               {item.title}
             </Text>
             <Text className="font-mono text-2xs text-foreground-muted">{item.count}</Text>
-          </View>
+          </Pressable>
         ) : item.kind === "task" ? (
           <BackgroundTaskRow task={item.task} depth={item.depth} />
         ) : (

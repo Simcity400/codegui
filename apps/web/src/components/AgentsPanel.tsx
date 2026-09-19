@@ -47,6 +47,7 @@ import {
   familyPanelSection,
   flattenAgentFamily,
   formatSubagentElapsed,
+  partitionAgentFamilies,
   subagentActivityText,
   subagentStatusLabel,
   type AgentFamilyNode,
@@ -236,6 +237,9 @@ function BackgroundTaskRow({
  * the nesting so a grandchild reads as a grandchild.
  */
 function FamilyRows({ node }: { node: AgentFamilyNode }) {
+  const [idleOpen, setIdleOpen] = useState(false);
+  const { active, idle } = useMemo(() => partitionAgentFamilies(node.children), [node.children]);
+  const idleCount = idle.reduce((count, child) => count + flattenAgentFamily(child).length, 0);
   return (
     <>
       {node.agent.kind === "background_task" ? (
@@ -245,9 +249,31 @@ function FamilyRows({ node }: { node: AgentFamilyNode }) {
       )}
       {node.children.length > 0 ? (
         <div className="ml-3 border-l border-border/40 pl-1">
-          {node.children.map((child) => (
+          {active.map((child) => (
             <FamilyRows key={child.agent.id} node={child} />
           ))}
+          {idle.length > 0 ? (
+            <>
+              <button
+                type="button"
+                aria-expanded={idleOpen}
+                aria-label={`Idle / finished under ${formatSubagentTitle(node.agent.title)}, ${idleCount}`}
+                onClick={() => setIdleOpen((open) => !open)}
+                className="flex w-full items-center gap-1.5 rounded-md px-1.5 py-2 text-left text-xs text-muted-foreground hover:bg-accent/40 focus-visible:outline-2 focus-visible:outline-ring"
+              >
+                {idleOpen ? (
+                  <ChevronDown aria-hidden className="size-3.5 shrink-0" />
+                ) : (
+                  <ChevronRight aria-hidden className="size-3.5 shrink-0" />
+                )}
+                <span>Idle / finished</span>
+                <span className="font-mono tabular-nums">{idleCount}</span>
+              </button>
+              {idleOpen
+                ? idle.map((child) => <FamilyRows key={child.agent.id} node={child} />)
+                : null}
+            </>
+          ) : null}
         </div>
       ) : null}
     </>

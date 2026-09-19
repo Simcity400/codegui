@@ -7,6 +7,7 @@ import {
   flattenAgentFamily,
   formatSubagentElapsed,
   isSubagentSessionLive,
+  partitionAgentFamilies,
   subagentActivityText,
   subagentStatusLabel,
 } from "./subagentPresentation.ts";
@@ -158,6 +159,28 @@ describe("subagent presentation", () => {
       [],
     );
     expect(familyPanelSection(settled.roots[0]!)).toBe("idle");
+
+    const mixed = buildAgentFamilies(
+      [
+        agent("parent", "2026-09-09T10:00:00.000Z", null),
+        agent("resting", "2026-09-09T10:01:00.000Z", "parent", "completed"),
+        agent("working", "2026-09-09T10:02:00.000Z", "resting"),
+        agent("finished", "2026-09-09T10:03:00.000Z", "parent", "completed"),
+      ],
+      [
+        task("live-shell", "2026-09-09T10:04:00.000Z", "parent"),
+        { ...task("done-shell", "2026-09-09T10:05:00.000Z", "parent"), status: "completed" },
+      ],
+    );
+    const { active, idle } = partitionAgentFamilies(mixed.roots[0]!.children);
+    expect(active.map((node) => node.agent.id)).toEqual(["resting", "live-shell"]);
+    expect(idle.map((node) => node.agent.id)).toEqual(["done-shell", "finished"]);
+    // Resuming a hidden agent promotes it without needing to open its disclosure.
+    const resumed = idle.map((node) => ({
+      ...node,
+      agent: { ...node.agent, status: "running" as const },
+    }));
+    expect(partitionAgentFamilies(resumed).idle).toEqual([]);
   });
   it("survives an owner cycle without dropping or looping", () => {
     const stub = (id: string, owningAgentId: string) => ({

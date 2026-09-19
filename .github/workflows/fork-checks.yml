@@ -84,6 +84,7 @@ jobs:
             packages/client-runtime/src/state/subagentRuntime.test.ts \
             packages/client-runtime/src/state/agentTranscripts.test.ts \
             packages/client-runtime/src/state/subagentPresentation.test.ts \
+            apps/mobile/src/features/agents/agentListRows.test.ts \
             packages/client-runtime/src/state/sideChat.test.ts \
             packages/client-runtime/src/state/codexGoal.test.ts \
             apps/server/src/provider/Layers/CodexAdapter.test.ts \
