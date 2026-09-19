@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vite-plus/test";
 
-import { detectComposerTrigger, serializeComposerFileLink } from "./composerTrigger.ts";
+import {
+  detectComposerTrigger,
+  parseSideChatSlashCommand,
+  serializeComposerFileLink,
+} from "./composerTrigger.ts";
 
 describe("detectComposerTrigger", () => {
   it.each(["$", "€", "£", "¥", "₹", "₩", "₿", "𑿝"])(
@@ -15,6 +19,14 @@ describe("detectComposerTrigger", () => {
       });
     },
   );
+});
+
+describe("parseSideChatSlashCommand", () => {
+  it("extracts multiline prompts", () => {
+    expect(parseSideChatSlashCommand("/side first line\nsecond line")).toEqual({
+      prompt: "first line\nsecond line",
+    });
+  });
 });
 
 describe("serializeComposerFileLink", () => {
