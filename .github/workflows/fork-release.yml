@@ -39,10 +39,64 @@ jobs:
     with:
       ref: ${{ inputs.ref || github.sha }}
 
+  prepare:
+    name: Pin the release version and source
+    needs: [checks]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    outputs:
+      ready: ${{ steps.pin.outputs.ready }}
+      version: ${{ steps.release_meta.outputs.version }}
+      tag: ${{ steps.release_meta.outputs.tag }}
+      name: ${{ steps.release_meta.outputs.name }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.ref || github.sha }}
+          sparse-checkout: |
+            /*
+            !/.repos/
+          sparse-checkout-cone-mode: false
+      - uses: voidzero-dev/setup-vp@v1
+        with:
+          node-version-file: package.json
+          cache: true
+          run-install: |
+            args:
+              - --filter=@t3tools/scripts...
+      - id: release_meta
+        run: |
+          node scripts/resolve-nightly-release.ts \
+            --date "$(date -u +%Y%m%d)" \
+            --run-number "${{ github.run_id }}" \
+            --sha "$(git rev-parse HEAD)" \
+            --github-output
+      - id: pin
+        name: Tag the checked source before main can advance during packaging
+        env:
+          RELEASE_TAG: ${{ steps.release_meta.outputs.tag }}
+        run: |
+          set -euo pipefail
+          source="$(git rev-parse HEAD)"
+          tagged="$(git ls-remote origin "refs/tags/$RELEASE_TAG" | cut -f1)"
+          if [[ -n "$tagged" ]]; then
+            [[ "$tagged" == "$source" ]] || { echo 'Release tag names different source' >&2; exit 1; }
+          elif [[ "$(git ls-remote origin refs/heads/main | cut -f1)" != "$source" ]]; then
+            echo 'A newer main is queued for release; skipping this superseded build.'
+            echo 'ready=false' >> "$GITHUB_OUTPUT"
+            exit 0
+          else
+            # GITHUB_TOKEN cannot always create a new tag for an older commit
+            # that changed workflows. Reserve it while this source is main.
+            git push origin "HEAD:refs/tags/$RELEASE_TAG"
+          fi
+          echo 'ready=true' >> "$GITHUB_OUTPUT"
+
   build:
     name: Build Windows ${{ matrix.arch }}
-    needs: [checks]
-    if: github.repository == 'Simcity400/t3code-personal'
+    needs: [prepare]
+    if: needs.prepare.outputs.ready == 'true' && github.repository == 'Simcity400/t3code-personal'
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 60
     strategy:
@@ -55,10 +109,6 @@ jobs:
           - arch: arm64
             runner: windows-11-arm
             rust_target: aarch64-pc-windows-msvc
-    outputs:
-      version: ${{ steps.release_meta.outputs.version }}
-      tag: ${{ steps.release_meta.outputs.tag }}
-      name: ${{ steps.release_meta.outputs.name }}
     env:
       # T3 Connect public build config (same values as .env). These are the
       # public client-side values shipped inside the official T3 Code build —
@@ -94,19 +144,8 @@ jobs:
         with:
           targets: ${{ matrix.rust_target }}
 
-      - id: release_meta
-        name: Resolve fork nightly version
-        shell: bash
-        run: |
-          nightly_date="$(date -u +%Y%m%d)"
-          node scripts/resolve-nightly-release.ts \
-            --date "$nightly_date" \
-            --run-number "${{ github.run_id }}" \
-            --sha "$(git rev-parse HEAD)" \
-            --github-output
-
       - name: Align package versions to release version
-        run: node scripts/update-release-package-versions.ts "${{ steps.release_meta.outputs.version }}"
+        run: node scripts/update-release-package-versions.ts "${{ needs.prepare.outputs.version }}"
 
       - name: Build desktop artifact
         shell: bash
@@ -115,7 +154,7 @@ jobs:
             --platform win \
             --target nsis \
             --arch ${{ matrix.arch }} \
-            --build-version "${{ steps.release_meta.outputs.version }}" \
+            --build-version "${{ needs.prepare.outputs.version }}" \
             --verbose
 
       - name: Collect release assets
@@ -153,7 +192,7 @@ jobs:
 
   publish:
     name: Publish release
-    needs: [build]
+    needs: [prepare, build]
     if: ${{ !cancelled() && needs.build.result == 'success' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 15
@@ -213,9 +252,9 @@ jobs:
         id: upload
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ needs.build.outputs.tag }}
+          tag_name: ${{ needs.prepare.outputs.tag }}
           target_commitish: ${{ inputs.ref != '' && inputs.ref || github.sha }}
-          name: ${{ needs.build.outputs.name }}
+          name: ${{ needs.prepare.outputs.name }}
           draft: true
           # Publish only after both architectures and manifests are verified.
           prerelease: false
