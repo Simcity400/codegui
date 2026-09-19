@@ -1,4 +1,8 @@
 import { useLoadBalancedEnvironment } from "../hooks/useLoadBalancedEnvironment";
+import { useSideChatCreation } from "./chat/useSideChatCreation";
+import { parseSideChatSlashCommand } from "@t3tools/shared/composerTrigger";
+import { SideChatPanel } from "./SideChatPanel";
+import { SideChatBar } from "./chat/SideChatBar";
 import { visibleThreadPullRequests } from "@t3tools/shared/threadPullRequests";
 import type { UsageLimitSourceSnapshots } from "@t3tools/contracts";
 import {
@@ -2282,6 +2286,42 @@ export default function ChatView(props: ChatViewProps) {
     activeThread ? environmentShell.stateAtom(activeThread.environmentId) : null,
   );
   const activeEnvironmentBootstrapComplete = activeEnvironmentShell.data?.snapshot._tag === "Some";
+  const sideChatTitlesById = useMemo(() => {
+    const snapshot = activeEnvironmentShell.data?.snapshot;
+    return new Map(
+      snapshot?._tag === "Some"
+        ? snapshot.value.threads
+            .filter(
+              (thread) =>
+                thread.forkedFromThreadId === activeThreadId && thread.sideChatPromotedAt == null,
+            )
+            .map((thread) => [String(thread.id), thread.title])
+        : [],
+    );
+  }, [activeEnvironmentShell.data?.snapshot, activeThreadId]);
+  useEffect(() => {
+    if (!activeThreadRef || !activeEnvironmentBootstrapComplete) return;
+    useRightPanelStore
+      .getState()
+      .reconcileSideChatSurfaces(activeThreadRef, [...sideChatTitlesById.keys()]);
+  }, [activeThreadRef, activeEnvironmentBootstrapComplete, sideChatTitlesById]);
+  const openSideChatSurface = useCallback(
+    (sideThreadId: string) => {
+      if (!activeThreadRef) return;
+      if (window.matchMedia(RIGHT_PANEL_INLINE_LAYOUT_MEDIA_QUERY).matches) {
+        void navigate({
+          to: "/$environmentId/$threadId",
+          params: buildThreadRouteParams({
+            environmentId: activeThreadRef.environmentId,
+            threadId: sideThreadId as ThreadId,
+          }),
+        });
+      } else {
+        useRightPanelStore.getState().openSideChat(activeThreadRef, sideThreadId);
+      }
+    },
+    [activeThreadRef, navigate],
+  );
   const activeProjectKey = activeProject
     ? `${activeProject.environmentId}:${activeProject.workspaceRoot}`
     : null;
@@ -3961,6 +4001,23 @@ export default function ChatView(props: ChatViewProps) {
     },
     [activeServerThread, draftId, routeThreadKey, routeThreadRef],
   );
+
+  const sideChatAvailable =
+    isServerThread &&
+    activeThread?.session != null &&
+    (selectedProvider === "codex" || selectedProvider === "claudeAgent") &&
+    activeProviderInstanceId === activeThread.modelSelection.instanceId;
+  const { createSideChat, addSideChatSurface, sideChatRouteRef } = useSideChatCreation({
+    activeThread,
+    sideChatAvailable,
+    activeEnvironmentUnavailable,
+    environmentId: activeThread?.environmentId,
+    routeThreadKey,
+    runtimeMode,
+    sendInFlightRef,
+    setThreadError,
+    openSideChatSurface,
+  });
 
   const interruptContextRef = useRef({ activeThread, phase, setThreadError });
   interruptContextRef.current = { activeThread, phase, setThreadError };
@@ -7455,6 +7512,46 @@ export default function ChatView(props: ChatViewProps) {
       terminalContexts: composerTerminalContexts,
       elementContextCount: composerPreviewAnnotations.length + composerReviewComments.length,
     });
+    const sideCommand = parseSideChatSlashCommand(trimmed);
+    if (sideCommand !== null) {
+      if (
+        !isServerThread ||
+        activeThread.session === null ||
+        ctxSelectedModelSelection.instanceId !== activeThread.modelSelection.instanceId ||
+        (ctxSelectedProvider !== "codex" && ctxSelectedProvider !== "claudeAgent")
+      ) {
+        setThreadError(
+          activeThread.id,
+          "Start a Codex or Claude conversation before creating a side chat.",
+        );
+        return;
+      }
+      if (
+        composerImages.length ||
+        composerFiles.length ||
+        composerTerminalContexts.length ||
+        composerPreviewAnnotations.length ||
+        composerReviewComments.length
+      ) {
+        setThreadError(
+          activeThread.id,
+          "Open the side chat with /side first, then add attachments or context there.",
+        );
+        return;
+      }
+      if (
+        await createSideChat(sideCommand.prompt, ctxSelectedModelSelection, sendInteractionMode)
+      ) {
+        if (
+          useComposerDraftStore.getState().getComposerDraft(composerDraftTarget)?.prompt ===
+          promptForSend
+        ) {
+          setComposerDraftPrompt(composerDraftTarget, "");
+          if (sideChatRouteRef.current === routeThreadKey) promptRef.current = "";
+        }
+      }
+      return;
+    }
     const feedbackCommand =
       ctxSelectedProvider === "codex" &&
       composerImages.length === 0 &&
@@ -9664,6 +9761,37 @@ export default function ChatView(props: ChatViewProps) {
             : undefined
         }
       />
+    ) : renderedRightPanelSurface?.kind === "side-chat" ? (
+      <SideChatPanel
+        key={scopedThreadKey({
+          environmentId: activeThreadRef.environmentId,
+          threadId: renderedRightPanelSurface.threadId as ThreadId,
+        })}
+        threadRef={scopeThreadRef(
+          activeThreadRef.environmentId,
+          renderedRightPanelSurface.threadId as ThreadId,
+        )}
+        parentTitle={activeThread.title}
+        cwd={gitCwd ?? undefined}
+        skills={activeProviderStatus?.skills ?? EMPTY_PROVIDER_SKILLS}
+        resolvedTheme={resolvedTheme}
+        timestampFormat={timestampFormat}
+        onImageExpand={onExpandTimelineImage}
+        onFileOpen={openFileAttachment}
+        onFileDownload={downloadFileAttachment}
+        onOpenFullView={() =>
+          void navigate({
+            to: "/$environmentId/$threadId",
+            params: buildThreadRouteParams({
+              environmentId: activeThreadRef.environmentId,
+              threadId: renderedRightPanelSurface.threadId as ThreadId,
+            }),
+          })
+        }
+        onRemoveSurface={() =>
+          useRightPanelStore.getState().closeSurface(activeThreadRef, renderedRightPanelSurface.id)
+        }
+      />
     ) : renderedRightPanelSurface?.kind === "pull-requests" && activeThreadRef ? (
       <ThreadPullRequestsPanel threadRef={activeThreadRef} />
     ) : renderedRightPanelSurface?.kind === "agents" ? (
@@ -9859,6 +9987,9 @@ export default function ChatView(props: ChatViewProps) {
               />
             </div>
             {/* Messages Wrapper */}
+            {isServerThread ? (
+              <SideChatBar environmentId={activeThread.environmentId} threadId={activeThread.id} />
+            ) : null}
             <div className="relative flex min-h-0 flex-1 flex-col bg-background">
               {/* Messages — LegendList handles virtualization and scrolling internally */}
               <MessagesTimeline
@@ -10328,6 +10459,10 @@ export default function ChatView(props: ChatViewProps) {
           onAddPullRequest={addPullRequestSurface}
           onAddPullRequests={addPullRequestsSurface}
           onAddAgents={addAgentsSurface}
+          onAddSideChat={addSideChatSurface}
+          onOpenSideChat={openSideChatSurface}
+          sideChatAvailable={sideChatAvailable}
+          sideChatTitlesById={sideChatTitlesById}
           onAddDevice={addDeviceSurface}
           browserAvailable={isPreviewSupportedInRuntime()}
           terminalAvailable={activeProject !== null}
@@ -10345,6 +10480,7 @@ export default function ChatView(props: ChatViewProps) {
       {rightPanelPresent && shouldUseRightPanelSheet && activeThreadRef ? (
         <RightPanelSheet
           animationDurationMs={panelAnimationsActive ? panelAnimationDurationMs : 0}
+          fullWidth={renderedRightPanelSurface?.kind === "side-chat"}
           open={rightPanelOpen}
           underFloatingPreview={previewMiniPlayerVisible}
           onClose={closePreviewPanel}

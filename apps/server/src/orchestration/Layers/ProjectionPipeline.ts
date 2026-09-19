@@ -621,6 +621,8 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
             worktreePath: event.payload.worktreePath,
             linkedPullRequest: null,
             branchPullRequest: null,
+            forkedFromThreadId: event.payload.forkedFromThreadId ?? null,
+            sideChatPromotedAt: event.payload.sideChatPromotedAt ?? null,
             latestTurnId: null,
             createdAt: event.payload.createdAt,
             updatedAt: event.payload.updatedAt,
@@ -831,6 +833,9 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
               : {}),
             ...(event.payload.branchPullRequest !== undefined
               ? { branchPullRequest: event.payload.branchPullRequest }
+              : {}),
+            ...(event.payload.sideChatPromotedAt !== undefined
+              ? { sideChatPromotedAt: event.payload.sideChatPromotedAt }
               : {}),
             updatedAt: event.payload.updatedAt,
           });

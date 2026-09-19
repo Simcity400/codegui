@@ -52,6 +52,8 @@ export function mergeEnvironmentThread(
     interactionMode: shell.interactionMode,
     branch: shell.branch,
     worktreePath: shell.worktreePath,
+    ...(shell.forkedFromThreadId != null ? { forkedFromThreadId: shell.forkedFromThreadId } : {}),
+    ...(shell.sideChatPromotedAt != null ? { sideChatPromotedAt: shell.sideChatPromotedAt } : {}),
     latestTurn: shell.latestTurn,
     createdAt: shell.createdAt,
     updatedAt: shell.updatedAt,

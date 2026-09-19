@@ -63,6 +63,7 @@ import {
 } from "../../serverSettings.ts";
 import { resolveProjectSettings } from "@t3tools/shared/projectSettings";
 import { VcsStatusBroadcaster } from "../../vcs/VcsStatusBroadcaster.ts";
+import { withSideChatBoundary } from "../../provider/SideChatInstructions.ts";
 import { GitWorkflowService } from "../../git/GitWorkflowService.ts";
 const isProviderAdapterRequestError = Schema.is(ProviderAdapterRequestError);
 const isProviderAdapterValidationError = Schema.is(ProviderAdapterValidationError);
@@ -1470,10 +1471,16 @@ const make = Effect.gen(function* () {
       turnsAfterCompaction.set(event.payload.threadId, queued);
       return;
     }
+    // The stored message stays the user's own words; only the provider sees
+    // the boundary, and only on the side chat's first turn.
+    const sideChatFirstTurn =
+      thread.forkedFromThreadId != null &&
+      thread.sideChatPromotedAt == null &&
+      !hasOtherUserMessages;
     const sendTurnRequest = yield* buildSendTurnRequestForThread({
       threadId: event.payload.threadId,
       messageText: projectComposerContextForProvider({
-        text: message.text,
+        text: sideChatFirstTurn ? withSideChatBoundary(message.text) : message.text,
         records: message.context?.records ?? [],
       }),
       ...(message.attachments !== undefined ? { attachments: message.attachments } : {}),

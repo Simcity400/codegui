@@ -1,10 +1,12 @@
 import { useAtomValue } from "@effect/atom-react";
+import { useMemo } from "react";
 
 import { appAtomRegistry } from "./atom-registry";
 import type {
   EnvironmentProject,
   EnvironmentThreadShell,
 } from "@t3tools/client-runtime/state/shell";
+import { visibleThreadShells } from "@t3tools/client-runtime/state/sideChat";
 import type {
   EnvironmentId,
   ScopedProjectRef,
@@ -58,6 +60,12 @@ export function useProjects(): ReadonlyArray<EnvironmentProject> {
 
 export function useThreadShells(): ReadonlyArray<EnvironmentThreadShell> {
   return useAtomValue(environmentThreadShells.threadShellsAtom);
+}
+
+/** Thread lists: everything except side chats still attached to a parent. */
+export function useVisibleThreadShells(): ReadonlyArray<EnvironmentThreadShell> {
+  const threads = useThreadShells();
+  return useMemo(() => visibleThreadShells(threads), [threads]);
 }
 
 export function useProject(ref: ScopedProjectRef | null): EnvironmentProject | null {

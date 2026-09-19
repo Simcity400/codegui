@@ -11,6 +11,7 @@ export function RightPanelSheet(props: {
   children: ReactNode;
   open: boolean;
   underFloatingPreview?: boolean;
+  fullWidth?: boolean;
   onClose: () => void;
 }) {
   return (
@@ -33,7 +34,11 @@ export function RightPanelSheet(props: {
               viewportClassName: RIGHT_PANEL_SHEET_LAYER_CLASS_NAME,
             }
           : {})}
-        className={RIGHT_PANEL_SHEET_CLASS_NAME}
+        className={
+          props.fullWidth
+            ? "w-screen min-w-0 max-w-none p-0 wco:mt-[env(titlebar-area-height)] wco:h-[calc(100%-env(titlebar-area-height))] wco:max-h-[calc(100%-env(titlebar-area-height))]"
+            : RIGHT_PANEL_SHEET_CLASS_NAME
+        }
       >
         {props.children}
       </SheetPopup>

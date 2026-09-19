@@ -4,6 +4,7 @@ import type {
   EnvironmentThread,
   EnvironmentThreadShell,
 } from "@t3tools/client-runtime/state/shell";
+import { visibleThreadShells } from "@t3tools/client-runtime/state/sideChat";
 import {
   type EnvironmentThreadStatus,
   mergeEnvironmentThread,
@@ -78,6 +79,12 @@ export function useThreadShells(): ReadonlyArray<EnvironmentThreadShell> {
   return useAtomValue(environmentThreadShells.threadShellsAtom);
 }
 
+/** Thread lists: everything except side chats still attached to a parent. */
+export function useVisibleThreadShells(): ReadonlyArray<EnvironmentThreadShell> {
+  const threads = useThreadShells();
+  return useMemo(() => visibleThreadShells(threads), [threads]);
+}
+
 export function useAllEnvironmentShellsBootstrapped(): boolean {
   return useAtomValue(allEnvironmentShellsBootstrappedAtom);
 }
@@ -90,6 +97,13 @@ export function useThreadShellsForProjectRefs(
   refs: ReadonlyArray<ScopedProjectRef>,
 ): ReadonlyArray<EnvironmentThreadShell> {
   return useAtomValue(environmentThreadShells.threadShellsForProjectRefsAtom(refs));
+}
+
+export function useVisibleThreadShellsForProjectRefs(
+  refs: ReadonlyArray<ScopedProjectRef>,
+): ReadonlyArray<EnvironmentThreadShell> {
+  const threads = useThreadShellsForProjectRefs(refs);
+  return useMemo(() => visibleThreadShells(threads), [threads]);
 }
 
 export function useProject(ref: ScopedProjectRef | null): EnvironmentProject | null {

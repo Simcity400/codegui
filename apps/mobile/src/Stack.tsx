@@ -1,3 +1,4 @@
+import { ThreadSideChatsRouteScreen } from "./features/threads/ThreadSideChatsRouteScreen";
 import {
   createPathConfigForStaticNavigation,
   getPathFromState,
@@ -596,6 +597,11 @@ export const RootStack = createNativeStackNavigator({
       screen: ThreadTerminalRouteScreen,
       linking: `${THREAD_LINKING_PREFIX}/terminal`,
       options: SOLID_HEADER_OPTIONS,
+    }),
+    ThreadSideChats: createNativeStackScreen({
+      screen: ThreadSideChatsRouteScreen,
+      linking: `${THREAD_LINKING_PREFIX}/side-chats`,
+      options: { ...SOLID_HEADER_OPTIONS, title: "Side chats" },
     }),
     ThreadDevicePreview: createNativeStackScreen({
       screen: DevicePreviewRouteScreen,
