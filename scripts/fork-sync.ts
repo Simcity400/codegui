@@ -234,7 +234,12 @@ if (import.meta.main) {
       tracked.tag,
       !published ||
         !hasDesktopAssets(published) ||
-        hasReleaseChanges(cwd, published.target_commitish, git(cwd, "rev-parse", "HEAD")),
+        hasReleaseChanges(
+          cwd,
+          // Release metadata may name a moving branch; only the tag pins the build.
+          resolveTagCommit("https://github.com/" + repo + ".git", published.tag_name) ?? undefined,
+          git(cwd, "rev-parse", "HEAD"),
+        ),
     );
     output("ref", git(cwd, "rev-parse", "HEAD"));
     output("tag", upstream.tag_name);

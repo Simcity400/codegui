@@ -163,7 +163,16 @@ describe("published nightly sync", () => {
     expect(resolveTagCommit(upstream, TAG)).toBe(head);
     git(upstream, "tag", "-d", TAG);
     git(upstream, "tag", "-a", "-m", "annotated", TAG);
+    write(upstream, "feature.txt", "main advanced after release\n");
+    commit(upstream);
     expect(resolveTagCommit(upstream, TAG)).toBe(head);
+    expect(
+      hasReleaseChanges(
+        upstream,
+        resolveTagCommit(upstream, TAG) ?? undefined,
+        git(upstream, "rev-parse", "HEAD"),
+      ),
+    ).toBe(true);
     expect(resolveTagCommit(upstream, "v0.0.39-nightly.20260905.9999")).toBeNull();
   });
   it("does not overwrite a fork-owned workflow", () => {

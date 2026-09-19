@@ -248,12 +248,20 @@ jobs:
           cat nightly.yml
           ls -la
 
+      - name: Verify the reserved release tag
+        env:
+          RELEASE_TAG: ${{ needs.prepare.outputs.tag }}
+        run: |
+          test "$(git ls-remote origin "refs/tags/$RELEASE_TAG" | cut -f1)" = "$(git rev-parse HEAD)"
+
       - name: Upload draft release
         id: upload
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ needs.prepare.outputs.tag }}
-          target_commitish: ${{ inputs.ref != '' && inputs.ref || github.sha }}
+          # The verified existing tag owns the source. Using the current branch
+          # here avoids GitHub's workflow-permission check on stale commit metadata.
+          target_commitish: main
           name: ${{ needs.prepare.outputs.name }}
           draft: true
           # Publish only after both architectures and manifests are verified.
