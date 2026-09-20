@@ -72,6 +72,7 @@ jobs:
             scripts/mobile-build-budget.test.ts \
             scripts/merge-update-manifests.test.ts \
             apps/desktop/src/updates/DesktopUpdates.test.ts \
+            apps/desktop/src/updates/updateMachine.test.ts \
             apps/desktop/src/updates/windowsUpdateSelection.test.ts \
             apps/desktop/src/electron/ElectronUpdater.windows.test.ts \
             apps/server/src/provider/Layers/CodexSessionRuntime.test.ts \
