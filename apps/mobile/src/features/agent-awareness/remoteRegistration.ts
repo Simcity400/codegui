@@ -38,7 +38,7 @@ import {
 import type { AgentActivityProps } from "../../widgets/AgentActivity";
 import { getAgentLiveActivities, startAgentLiveActivity } from "./agentLiveActivity";
 import { resolveCloudPublicConfig } from "../cloud/publicConfig";
-import { supportsAgentAwarenessPush } from "./capabilities";
+import { supportsAgentAwarenessPush, usesDirectApplePush } from "./capabilities";
 import { makeRelayDeviceRegistrationRequest, resolveApsEnvironment } from "./registrationPayload";
 
 const REMOTE_ACTIVITY_REGISTRATION_RETRY_MS = 15_000;
@@ -57,6 +57,7 @@ const AgentAwarenessOperation = Schema.Literals([
   "list-active-live-activities",
   "load-live-activity-prime-preferences",
   "prime-live-activity",
+  "reconcile-live-activity",
 ]);
 
 export class AgentAwarenessOperationError extends Schema.TaggedError<AgentAwarenessOperationError>()(
@@ -72,7 +73,12 @@ export class AgentAwarenessOperationError extends Schema.TaggedError<AgentAwaren
 }
 
 const environmentConnections = new Map<EnvironmentId, SavedRemoteConnection>();
-const activityPushTokenListeners = new WeakSet<LiveActivity<AgentActivityProps>>();
+const activityPushTokenListeners = new Map<string, { remove: () => void }>();
+
+function clearActivityPushTokenListeners(): void {
+  for (const subscription of activityPushTokenListeners.values()) subscription.remove();
+  activityPushTokenListeners.clear();
+}
 // Activity tokens the relay recently accepted, by acceptance time. The refresh
 // runs on sign-in, every app foreground, and every environment-connection
 // update, which arrive in bursts and spammed identical registrations. But the
@@ -84,7 +90,7 @@ const activityPushTokenListeners = new WeakSet<LiveActivity<AgentActivityProps>>
 // sign-out/identity change alongside the device registration state.
 const ACTIVITY_TOKEN_REREGISTER_INTERVAL_MS = 60_000;
 const registeredActivityPushTokens = new Map<string, number>();
-let androidDeviceReplayedAt: number | null = null;
+let deviceRegisteredAt: number | null = null;
 let pushTokenSubscription: { remove: () => void } | null = null;
 let appStateSubscription: { remove: () => void } | null = null;
 
@@ -174,6 +180,7 @@ export function setAgentAwarenessRelayTokenProvider(
   provider: (() => Promise<string | null>) | null,
   identity?: string,
 ): void {
+  if (usesDirectApplePush()) return;
   const isExistingIdentity =
     provider !== null &&
     !shouldRegisterAgentAwarenessDeviceForProvider(relayTokenProviderIdentity, identity);
@@ -183,11 +190,12 @@ export function setAgentAwarenessRelayTokenProvider(
     if (relayTokenProviderIdentity && identity !== relayTokenProviderIdentity) {
       clearAndroidAgentNotifications();
     }
-    androidDeviceReplayedAt = null;
+    deviceRegisteredAt = null;
     deviceRegistrationGeneration++;
     activeDeviceRegistration = null;
     pendingDeviceRegistration = null;
     registeredActivityPushTokens.clear();
+    clearActivityPushTokenListeners();
   }
   relayTokenProvider = provider;
   relayTokenProviderIdentity = provider ? (identity ?? null) : null;
@@ -236,12 +244,13 @@ export function setAgentAwarenessRelayTokenProvider(
 // the persisted registration would be wrong — the relay still holds a valid
 // registration and the next mount reuses it.
 export function releaseAgentAwarenessRelayTokenProvider(): void {
+  clearActivityPushTokenListeners();
   relayTokenProvider = null;
   relayTokenProviderIdentity = null;
   deviceRegistrationGeneration++;
   activeDeviceRegistration = null;
   pendingDeviceRegistration = null;
-  androidDeviceReplayedAt = null;
+  deviceRegisteredAt = null;
   pushTokenSubscription?.remove();
   pushTokenSubscription = null;
   appStateSubscription?.remove();
@@ -317,9 +326,7 @@ const relayToken = (
     });
   });
 
-// Stable fingerprint of everything the relay stores for this device. When it
-// matches the last accepted registration for the same account, re-registering
-// is a no-op, so a launch that changed nothing skips the request entirely.
+// Collapse identical registrations within the current refresh window.
 function registrationSignature(body: RelayDeviceRegistrationRequest): string {
   return [
     body.deviceId,
@@ -373,10 +380,8 @@ function registerDeviceWithRelay(
       return;
     }
 
-    // Skip the request when this account already registered an identical
-    // payload; the relay upsert would be a no-op. The record is only cleared on
-    // sign-out, so a device stays registered across launches without re-hitting
-    // the relay every time the app opens.
+    // Collapse bursts, but re-register after a cold start or time away: APNs
+    // may have invalidated the relay's token since our last accepted request.
     const identity = relayTokenProviderIdentity ?? "";
     const persisted = yield* Effect.tryPromise({
       try: () => loadAgentAwarenessRegistrationRecord(),
@@ -395,18 +400,14 @@ function registerDeviceWithRelay(
     // The relay URL participates so pointing the app at a different relay
     // invalidates the record and re-registers there.
     const signature = `${relayConfig.url}|${registrationSignature(payload)}`;
-    // Android registration also silently replays the current card. Collapse
-    // foreground bursts, but repair missed pushes on cold start or a return
-    // after time away, just like re-registering an iOS activity token.
-    const needsAndroidReplay =
-      body.platform === "android" &&
-      (androidDeviceReplayedAt === null ||
-        Date.now() - androidDeviceReplayedAt >= ACTIVITY_TOKEN_REREGISTER_INTERVAL_MS);
+    const needsRegistrationRefresh =
+      deviceRegisteredAt === null ||
+      Date.now() - deviceRegisteredAt >= ACTIVITY_TOKEN_REREGISTER_INTERVAL_MS;
     if (
       persisted &&
       persisted.identity === identity &&
       persisted.signature === signature &&
-      !needsAndroidReplay
+      !needsRegistrationRefresh
     ) {
       setRegistrationStatus("registered");
       logRegistrationDebug("relay device registration skipped; already registered for account", {
@@ -433,7 +434,7 @@ function registerDeviceWithRelay(
       });
       return;
     }
-    if (body.platform === "android") androidDeviceReplayedAt = Date.now();
+    deviceRegisteredAt = Date.now();
     setRegistrationStatus("registered");
     yield* Effect.promise(() =>
       saveAgentAwarenessRegistrationRecord({
@@ -499,6 +500,7 @@ export function armAgentAwarenessLiveActivityForLocalWork(input: {
   readonly threadTitle: string;
   readonly projectTitle: string;
 }): void {
+  if (usesDirectApplePush()) return;
   if (!canRegisterRemoteLiveActivities() || !relayTokenProvider) {
     return;
   }
@@ -914,6 +916,7 @@ export function updateAgentAwarenessRegistrationPreferences(
 }
 
 export function __resetAgentAwarenessRemoteRegistrationForTest(): void {
+  clearActivityPushTokenListeners();
   environmentConnections.clear();
   pushTokenSubscription?.remove();
   pushTokenSubscription = null;
@@ -929,7 +932,7 @@ export function __resetAgentAwarenessRemoteRegistrationForTest(): void {
   activeDeviceRegistration = null;
   pendingDeviceRegistration = null;
   registrationStatus = "unknown";
-  androidDeviceReplayedAt = null;
+  deviceRegisteredAt = null;
   registrationStatusListeners.clear();
   registeredActivityPushTokens.clear();
 }
@@ -967,33 +970,11 @@ export function registerLiveActivityPushToken(input: {
       return false;
     }
 
-    const activityPushToken = yield* Effect.tryPromise({
-      try: () => input.activity.getPushToken(),
-      catch: (cause) =>
-        new AgentAwarenessOperationError({
-          operation: "read-live-activity-push-token",
-          cause,
-        }),
-    });
-    if (!activityPushToken) {
-      if (activityPushTokenListeners.has(input.activity)) {
-        logRegistrationDebug(
-          "live activity push token not available yet; token listener already registered",
-          {
-            connectionCount: environmentConnections.size,
-          },
-        );
-        return false;
-      }
-
-      logRegistrationDebug(
-        "live activity push token not available yet; listening for token event",
-        {
-          connectionCount: environmentConnections.size,
-        },
-      );
-      activityPushTokenListeners.add(input.activity);
-      input.activity.addPushTokenListener((event) => {
+    // Observe rotations even when the initial token is already available.
+    // Subscribe before reading so a token issued during lookup is not missed.
+    const activityId = input.activity.getId();
+    if (!activityPushTokenListeners.has(activityId)) {
+      const subscription = input.activity.addPushTokenListener((event) => {
         if (event.pushToken) {
           logRegistrationDebug("live activity push token event received", {
             tokenSuffix: event.pushToken.slice(-8),
@@ -1006,6 +987,18 @@ export function registerLiveActivityPushToken(input: {
           );
         }
       });
+      activityPushTokenListeners.set(activityId, subscription);
+    }
+
+    const activityPushToken = yield* Effect.tryPromise({
+      try: () => input.activity.getPushToken(),
+      catch: (cause) =>
+        new AgentAwarenessOperationError({
+          operation: "read-live-activity-push-token",
+          cause,
+        }),
+    });
+    if (!activityPushToken) {
       return false;
     }
 
@@ -1071,6 +1064,7 @@ export function refreshActiveLiveActivityRemoteRegistration(): Effect.Effect<
     if (!canRegisterRemoteLiveActivities() || !relayTokenProvider) {
       return;
     }
+    const generation = deviceRegistrationGeneration;
 
     let activities = yield* Effect.try({
       try: () => getAgentLiveActivities(),
@@ -1099,6 +1093,40 @@ export function refreshActiveLiveActivityRemoteRegistration(): Effect.Effect<
       activities = activities.slice(0, 1);
     }
 
+    const activeIds = new Set(activities.map((activity) => activity.getId()));
+    for (const [id, subscription] of activityPushTokenListeners) {
+      if (!activeIds.has(id)) {
+        subscription.remove();
+        activityPushTokenListeners.delete(id);
+      }
+    }
+
+    // A successful HTTP snapshot repairs missed pushes without depending on
+    // APNs to deliver the very replay needed to recover a stale card.
+    if (activities.length > 0) {
+      const snapshot = yield* readAgentActivitySnapshot();
+      if (generation !== deviceRegistrationGeneration || !relayTokenProvider) return;
+      if (snapshot !== null) {
+        yield* Effect.forEach(activities, (activity) =>
+          Effect.tryPromise({
+            try: () =>
+              snapshot.aggregate === null
+                ? activity.end("immediate")
+                : activity.update(snapshot.aggregate),
+            catch: (cause) =>
+              new AgentAwarenessOperationError({ operation: "reconcile-live-activity", cause }),
+          }).pipe(
+            Effect.catch((error) =>
+              Effect.sync(() =>
+                logRegistrationError("local live activity reconciliation failed", error),
+              ),
+            ),
+          ),
+        );
+        if (snapshot.aggregate === null) return;
+      }
+    }
+
     // Activities are only ever created here, in the foreground, where the
     // update token can be observed and registered immediately — the relay
     // never remote-starts one (background push-to-start wakes proved too
@@ -1119,6 +1147,7 @@ export function refreshActiveLiveActivityRemoteRegistration(): Effect.Effect<
       // prime, so only an explicit false blocks it.
       if (preferences?.liveActivitiesEnabled !== false) {
         const snapshot = yield* readAgentActivitySnapshot();
+        if (generation !== deviceRegistrationGeneration || !relayTokenProvider) return;
         // The snapshot request yields; an arm-on-send may have created the
         // card in the meantime. Re-check so two cards are never started.
         const armedMeanwhile = yield* Effect.try({
