@@ -264,7 +264,11 @@ it.effect("delivers completion from an actual orchestration event and ends the p
           // oxlint-disable-next-line t3code/no-manual-effect-runtime-in-tests -- Mock the Promise-based APNs transport boundary.
           Effect.runPromise(
             Queue.offer(delivered, message).pipe(
-              Effect.as({ ok: true, status: 200, reason: null }),
+              Effect.as(
+                message.kind === "alert"
+                  ? { ok: false, status: 503, reason: "ServiceUnavailable" }
+                  : { ok: true, status: 200, reason: null },
+              ),
             ),
           ),
         );
@@ -294,6 +298,11 @@ it.effect("delivers completion from an actual orchestration event and ends the p
           kind: "alert",
           payload: { aps: { alert: { title: "Agent finished" } }, threadId },
         });
+        send.mockResolvedValue({ ok: true, status: 200, reason: null });
+        expect((yield* push.register(principal, registration)).deliveryError).toBeNull();
+        expect(send.mock.calls.filter(([message]) => message.kind === "background")).toHaveLength(
+          2,
+        );
       }),
       true,
       services,

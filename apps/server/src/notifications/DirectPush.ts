@@ -303,7 +303,8 @@ export const layer = Layer.effect(
               registration.notificationsEnabled &&
               registration.pushToken &&
               (previous?.registration.pushToken !== registration.pushToken ||
-                !verifiedPushTokens.has(registration.pushToken))
+                !verifiedPushTokens.has(registration.pushToken) ||
+                errors.has(`${key}:alert`))
             ) {
               yield* deliver(key, {
                 kind: "background",
