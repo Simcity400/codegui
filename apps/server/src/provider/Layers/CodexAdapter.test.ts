@@ -1196,6 +1196,94 @@ lifecycleLayer("CodexAdapterLive lifecycle", (it) => {
     }),
   );
 
+  it.effect("maps child transcript messages and tools with ownership", () =>
+    Effect.gen(function* () {
+      const { adapter, runtime } = yield* startLifecycleRuntime();
+      const eventsFiber = yield* Stream.runCollect(Stream.take(adapter.streamEvents, 3)).pipe(
+        Effect.forkChild,
+      );
+      const notifications = [
+        {
+          method: "item/agentMessage/delta",
+          params: {
+            threadId: "child",
+            turnId: "child-turn",
+            itemId: "message",
+            delta: "Child reply",
+          },
+        },
+        {
+          method: "item/completed",
+          params: {
+            completedAtMs: 0,
+            threadId: "child",
+            turnId: "child-turn",
+            item: {
+              id: "message",
+              type: "agentMessage",
+              text: "Child reply",
+              phase: "final_answer",
+            },
+          },
+        },
+        {
+          method: "item/completed",
+          params: {
+            completedAtMs: 0,
+            threadId: "child",
+            turnId: "child-turn",
+            item: {
+              id: "tool",
+              type: "commandExecution",
+              command: "pwd",
+              cwd: "/tmp",
+              processId: null,
+              status: "completed",
+              commandActions: [],
+              aggregatedOutput: "/tmp",
+              exitCode: 0,
+              durationMs: 1,
+            },
+          },
+        },
+      ];
+      for (const [index, notification] of notifications.entries()) {
+        yield* runtime.emit({
+          id: asEventId(`child-transcript-${index}`),
+          kind: "notification",
+          provider: ProviderDriverKind.make("codex"),
+          createdAt: "2026-01-01T00:00:00.000Z",
+          threadId: asThreadId("thread-1"),
+          turnId: asTurnId("parent-turn"),
+          itemId: asItemId(index === 2 ? "tool" : "message"),
+          method: "collabAgent/transcript",
+          payload: { agentThreadId: "child", ...notification },
+        });
+      }
+      const events = Array.from(yield* Fiber.join(eventsFiber));
+      NodeAssert.deepStrictEqual(
+        events.map((event) => [
+          event.type,
+          "agentId" in event.payload ? event.payload.agentId : undefined,
+          event.turnId,
+        ]),
+        [
+          ["content.delta", "child", "parent-turn"],
+          ["item.completed", "child", "parent-turn"],
+          ["item.completed", "child", "parent-turn"],
+        ],
+      );
+      NodeAssert.equal(
+        events[1]?.type === "item.completed" ? events[1].payload.detail : undefined,
+        "Child reply",
+      );
+      NodeAssert.equal(
+        events[2]?.type === "item.completed" ? events[2].payload.detail : undefined,
+        "pwd",
+      );
+    }),
+  );
+
   it.effect("carries child model metadata through every task event", () =>
     Effect.gen(function* () {
       const { adapter, runtime } = yield* startLifecycleRuntime();

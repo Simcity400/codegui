@@ -94,7 +94,7 @@ export function useAssistantCitationTarget({
         if (navigation.requestedPages.has(cursor) || navigation.requestedPages.size >= 20) {
           fail(
             "Could not load the cited response",
-            "Load earlier turns, then click the citation to try again. Your saved quote is unchanged.",
+            "Reopen the transcript, then click the citation to try again. Your saved quote is unchanged.",
           );
           return;
         }

@@ -375,7 +375,7 @@ export function ThreadAgentTranscriptRouteScreen(
   const insets = useSafeAreaInsets();
 
   return (
-    <View className="flex-1 bg-screen">
+    <View className="flex-1 bg-screen" style={{ paddingBottom: insets.bottom + 16 }}>
       <NativeStackScreenOptions options={{ title: agent?.title ?? "Agent transcript" }} />
       <ThreadFeed
         key={agentId}
@@ -396,7 +396,7 @@ export function ThreadAgentTranscriptRouteScreen(
         submittedMessageId={null}
         contentInsetEndAdjustment={contentInsetEndAdjustment}
         contentTopInset={0}
-        contentBottomInset={insets.bottom + 16}
+        contentBottomInset={0}
         loadEarlier={loadEarlier}
       />
     </View>

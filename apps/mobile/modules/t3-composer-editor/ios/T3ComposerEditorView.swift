@@ -457,7 +457,9 @@ public final class T3ComposerEditorView: ExpoView, UITextViewDelegate, UITextDro
     textView.backgroundColor = .clear
     textView.textContainerInset = .zero
     textView.textContainer.lineFragmentPadding = 0
-    textView.keyboardDismissMode = .interactive
+    // Scrolling a long draft must not dismiss the keyboard: blur collapses
+    // the composer and disables scrolling before the reader reaches the text.
+    textView.keyboardDismissMode = .none
     textView.alwaysBounceVertical = false
     textView.showsVerticalScrollIndicator = true
     textView.adjustsFontForContentSizeCategory = true

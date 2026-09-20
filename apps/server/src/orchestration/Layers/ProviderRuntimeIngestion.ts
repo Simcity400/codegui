@@ -1056,6 +1056,29 @@ const make = Effect.gen(function* () {
     lookup: () => Effect.succeed(new Set<MessageId>()),
   });
 
+  // Children can outlive the parent turn and may stop without item/completed.
+  const pendingAgentMessages = yield* Cache.make<
+    ThreadId,
+    ReadonlyMap<MessageId, { agentId: string; turnId: TurnId | undefined }>
+  >({
+    capacity: TURN_MESSAGE_IDS_BY_TURN_CACHE_CAPACITY,
+    timeToLive: TURN_MESSAGE_IDS_BY_TURN_TTL,
+    lookup: () => Effect.succeed(new Map()),
+  });
+
+  const forgetAgentMessage = Effect.fnUntraced(function* (
+    threadId: ThreadId,
+    messageId: MessageId,
+  ) {
+    const pending = new Map(yield* Cache.get(pendingAgentMessages, threadId));
+    pending.delete(messageId);
+    if (pending.size === 0) {
+      yield* Cache.invalidate(pendingAgentMessages, threadId);
+    } else {
+      yield* Cache.set(pendingAgentMessages, threadId, pending);
+    }
+  });
+
   const bufferedAssistantTextByMessageId = yield* Cache.make<MessageId, string>({
     capacity: BUFFERED_MESSAGE_TEXT_BY_MESSAGE_ID_CACHE_CAPACITY,
     timeToLive: BUFFERED_MESSAGE_TEXT_BY_MESSAGE_ID_TTL,
@@ -1496,6 +1519,7 @@ const make = Effect.gen(function* () {
     finalDeltaCommandTag: string;
     fallbackText?: string;
     hasProjectedMessage?: boolean;
+    agentId?: string;
   }) =>
     Effect.gen(function* () {
       const bufferedText = yield* takeBufferedAssistantText(input.messageId);
@@ -1516,6 +1540,7 @@ const make = Effect.gen(function* () {
           threadId: input.threadId,
           messageId: input.messageId,
           delta: text,
+          ...(input.agentId ? { agentId: input.agentId } : {}),
           ...(input.turnId ? { turnId: input.turnId } : {}),
           createdAt: isReasoning
             ? yield* reasoningStartedAt(input.messageId, input.createdAt)
@@ -1532,11 +1557,36 @@ const make = Effect.gen(function* () {
           threadId: input.threadId,
           messageId: input.messageId,
           ...(input.turnId ? { turnId: input.turnId } : {}),
+          ...(input.agentId ? { agentId: input.agentId } : {}),
           createdAt: input.createdAt,
         });
       }
       yield* clearAssistantMessageState(input.messageId);
     });
+
+  const finalizeAgentMessages = Effect.fnUntraced(function* (
+    event: ProviderRuntimeEvent,
+    agentId?: string,
+  ) {
+    const pending = yield* Cache.getOption(pendingAgentMessages, event.threadId);
+    if (Option.isNone(pending)) return;
+    for (const [messageId, owner] of pending.value) {
+      if (agentId !== undefined && owner.agentId !== agentId) continue;
+      const existing = yield* getThreadMessageById(event.threadId, messageId);
+      yield* finalizeAssistantMessage({
+        event,
+        threadId: event.threadId,
+        messageId,
+        agentId: owner.agentId,
+        ...(owner.turnId ? { turnId: owner.turnId } : {}),
+        createdAt: event.createdAt,
+        commandTag: "agent-stopped-complete",
+        finalDeltaCommandTag: "agent-stopped-final-delta",
+        hasProjectedMessage: existing !== undefined,
+      });
+      yield* forgetAgentMessage(event.threadId, messageId);
+    }
+  });
 
   const finalizeActiveSegmentForTurn = (input: {
     event: ProviderRuntimeEvent;
@@ -1784,6 +1834,104 @@ const make = Effect.gen(function* () {
 
       const thread = yield* resolveThreadRuntimeContext(event.threadId);
       if (!thread) return;
+
+      if (
+        (event.type === "content.delta" ||
+          event.type === "item.started" ||
+          event.type === "item.updated" ||
+          event.type === "item.completed") &&
+        event.payload.agentId
+      ) {
+        // Child messages use their own item identity and never touch the root's
+        // active text/reasoning segment, turn state, or completion bookkeeping.
+        const agentId = event.payload.agentId;
+        const messageId = MessageId.make(
+          `agent:${agentId}:assistant:${event.itemId ?? event.eventId}`,
+        );
+        const turnId = toTurnId(event.turnId);
+        if (event.type === "content.delta" && event.payload.streamKind === "assistant_text") {
+          const pending = new Map(yield* Cache.get(pendingAgentMessages, thread.id));
+          if (!pending.has(messageId)) {
+            pending.set(messageId, { agentId, turnId });
+            yield* Cache.set(pendingAgentMessages, thread.id, pending);
+          }
+          const mode = yield* resolveResponseStreamingMode(thread.projectId);
+          const delta =
+            mode === "token"
+              ? event.payload.delta
+              : yield* appendBufferedAssistantText(
+                  messageId,
+                  event.payload.delta,
+                  mode,
+                  yield* Clock.currentTimeMillis,
+                );
+          if (delta.length > 0) {
+            yield* orchestrationEngine.dispatch({
+              type: "thread.message.assistant.delta",
+              commandId: yield* providerCommandId(event, "agent-assistant-delta"),
+              threadId: thread.id,
+              messageId,
+              agentId,
+              delta,
+              ...(turnId ? { turnId } : {}),
+              createdAt: event.createdAt,
+            });
+          }
+        } else if (
+          event.type === "item.completed" &&
+          event.payload.itemType === "assistant_message"
+        ) {
+          const existing = yield* getThreadMessageById(thread.id, messageId);
+          // A repeated completion must not append the snapshot twice.
+          if (existing?.isStreaming !== false) {
+            yield* finalizeAssistantMessage({
+              event,
+              threadId: thread.id,
+              messageId,
+              agentId,
+              ...(turnId ? { turnId } : {}),
+              createdAt: event.createdAt,
+              commandTag: "agent-assistant-complete",
+              finalDeltaCommandTag: "agent-assistant-final-delta",
+              hasProjectedMessage: existing !== undefined,
+              ...((existing === undefined || existing.text.length === 0) &&
+              event.payload.detail !== undefined
+                ? { fallbackText: event.payload.detail }
+                : {}),
+            });
+          }
+          yield* forgetAgentMessage(thread.id, messageId);
+        }
+        yield* Effect.forEach(runtimeEventToActivities(event), (activity) =>
+          Effect.gen(function* () {
+            yield* orchestrationEngine.dispatch({
+              type: "thread.activity.append",
+              commandId: yield* providerCommandId(event, "agent-activity-append"),
+              threadId: thread.id,
+              activity,
+              createdAt: activity.createdAt,
+            });
+          }),
+        );
+        return;
+      }
+
+      if (event.type === "session.exited") {
+        yield* finalizeAgentMessages(event);
+      } else if (
+        event.provider === "codex" &&
+        (event.type === "task.completed" ||
+          ((event.type === "task.updated" || event.type === "task.progress") &&
+            (event.payload.status === "idle" ||
+              event.payload.status === "completed" ||
+              event.payload.status === "interrupted" ||
+              event.payload.status === "cancelled" ||
+              event.payload.status === "failed")))
+      ) {
+        // Codex's task represents the child itself. Task linkage's agentId
+        // instead describes the agent owning a task for other providers.
+        yield* finalizeAgentMessages(event, event.payload.taskId);
+      }
 
       if (event.type === "thread.goal.updated" || event.type === "thread.goal.cleared") {
         // A child agent's goal is its own; only the root thread's goal is

@@ -9854,7 +9854,6 @@ export default function ChatView(props: ChatViewProps) {
         model={agentPanelModel}
         environmentId={activeThreadRef?.environmentId ?? null}
         threadId={activeThreadRef?.threadId ?? null}
-        loadEarlier={loadEarlierTurns}
         renderTranscript={(agent, { openRoster }) => (
           <ScopedAgentTranscript
             key={agent.id}

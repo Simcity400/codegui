@@ -40,13 +40,6 @@ function statusWithoutLiveData(data: Option.Option<OrchestrationThread>): Enviro
   return Option.isSome(data) ? "cached" : "empty";
 }
 
-/**
- * Turn window sizes for paginated thread loads: the initial page covers the
- * last 10 user-anchored turns (subagent/fan-out turns ride along), each
- * "load earlier" tap fetches 20 more. Sized so first paint on the heaviest
- * observed threads stays around 100K gzipped while median threads load fully.
- */
-export const INITIAL_THREAD_USER_TURN_LIMIT = 10;
 const OLDER_THREAD_PAGE_USER_TURN_LIMIT = 20;
 
 function pageStateFromSnapshot(
@@ -771,11 +764,9 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
         yield* Ref.set(resumingLive, false);
 
         let current = yield* SubscriptionRef.get(state);
-        // A windowed cache resuming against a server without pagination is a
-        // trap: afterSequence resume keeps only the window, and the missing
-        // older turns can never be loaded (the server has no cursor reads).
-        // Drop the window marker and treat the data as needing a full reload.
-        if (!supportsPagination) {
+        // Opening a transcript loads its complete history. An older client's
+        // partial cache cannot resume by cursor alone: reload it in full once.
+        if (!supportsPagination || Option.exists(current.page, (page) => page.hasMore)) {
           yield* applyLock.withPermits(1)(
             Effect.gen(function* () {
               if (Option.isNone((yield* SubscriptionRef.get(state)).page)) return;
@@ -810,7 +801,7 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
           const httpSnapshot = yield* snapshotLoader.load(
             prepared,
             threadId,
-            supportsPagination ? { turnLimit: INITIAL_THREAD_USER_TURN_LIMIT } : undefined,
+            undefined,
             supportsReasoningMessages,
           );
           if (Option.isSome(httpSnapshot)) {
@@ -834,10 +825,6 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
           ...(canResume ? { afterSequence: sequence } : {}),
           ...(supportsCompletionMarker ? { requestCompletionMarker: true as const } : {}),
           ...(supportsReasoningMessages ? { reasoningMessages: true as const } : {}),
-          // The WS fallback snapshot (sent when afterSequence is missing or
-          // the gap is too large) should be windowed the same as the HTTP
-          // path; without this a resume failure re-downloads the full thread.
-          ...(supportsPagination ? { turnLimit: INITIAL_THREAD_USER_TURN_LIMIT } : {}),
         };
       }),
       {

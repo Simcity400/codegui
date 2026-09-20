@@ -442,6 +442,176 @@ describe("ProviderRuntimeIngestion", () => {
     };
   }
 
+  it.each(["token", "paragraph"] as const)(
+    "persists isolated agent transcripts with %s streaming",
+    async (responseStreaming) => {
+      const harness = await createHarness({
+        serverSettings: { responseStreamingMode: responseStreaming },
+      });
+      const base = {
+        provider: ProviderDriverKind.make("codex"),
+        threadId: asThreadId("thread-1"),
+        turnId: asTurnId("parent-turn"),
+        createdAt: "2026-01-01T00:00:01.000Z",
+      };
+      await harness.emitAndDrain([
+        { ...base, type: "turn.started", eventId: asEventId("parent-start"), payload: {} },
+        ...[undefined, "child-a", "child-b"].map((agentId) => ({
+          ...base,
+          type: "content.delta",
+          eventId: asEventId(`delta-${agentId ?? "root"}`),
+          itemId: "shared-item",
+          payload: {
+            streamKind: "assistant_text",
+            delta: `${agentId ?? "root"} text`,
+            ...(agentId ? { agentId } : {}),
+          },
+        })),
+        ...["child-a", "child-b", "child-a"].map((agentId, index) => ({
+          ...base,
+          type: "item.completed",
+          eventId: asEventId(`complete-${index}`),
+          itemId: "shared-item",
+          payload: { itemType: "assistant_message", detail: `${agentId} text`, agentId },
+        })),
+        {
+          ...base,
+          type: "item.completed",
+          eventId: asEventId("snapshot"),
+          itemId: "snapshot",
+          payload: { itemType: "assistant_message", detail: "Snapshot only", agentId: "child-a" },
+        },
+        {
+          ...base,
+          type: "item.completed",
+          eventId: asEventId("child-tool"),
+          itemId: "tool",
+          payload: { itemType: "command_execution", title: "pwd", agentId: "child-a" },
+        },
+      ]);
+      let thread = (await harness.readModel()).threads[0]!;
+      expect(
+        thread.messages
+          .filter((message) => message.agentId)
+          .map((message) => [message.agentId, message.text, message.streaming]),
+      ).toEqual([
+        ["child-a", "child-a text", false],
+        ["child-a", "Snapshot only", false],
+        ["child-b", "child-b text", false],
+      ]);
+      expect(thread.session?.status).toBe("running");
+      expect((await harness.readTurn(base.turnId))?.assistantMessageId ?? "").not.toContain(
+        "agent:",
+      );
+      expect(
+        thread.activities.find((activity) => activity.kind === "tool.completed")?.payload,
+      ).toMatchObject({ agentId: "child-a" });
+      await harness.emitAndDrain([
+        {
+          ...base,
+          type: "content.delta",
+          eventId: asEventId("root-next"),
+          itemId: "shared-item",
+          payload: { streamKind: "assistant_text", delta: " continued" },
+        },
+        {
+          ...base,
+          type: "item.completed",
+          eventId: asEventId("root-complete"),
+          itemId: "shared-item",
+          payload: { itemType: "assistant_message", detail: "root text continued" },
+        },
+      ]);
+      thread = (await harness.readModel()).threads[0]!;
+      expect(
+        thread.messages.filter((message) => !message.agentId).map((message) => message.text),
+      ).toEqual(["root text continued"]);
+    },
+  );
+
+  it.each(
+    (["token", "paragraph", "turn"] as const).flatMap((mode) =>
+      (["idle", "interrupted", "failed", "cancelled", "completed", "task.completed"] as const).map(
+        (status) => ({ mode, status }),
+      ),
+    ),
+  )(
+    "finalizes $mode child text on $status without completing sibling messages",
+    async ({ mode, status }) => {
+      const harness = await createHarness({ serverSettings: { responseStreamingMode: mode } });
+      const base = {
+        provider: ProviderDriverKind.make("codex"),
+        threadId: asThreadId("thread-1"),
+        turnId: asTurnId("parent-turn"),
+        createdAt: "2026-01-01T00:00:01.000Z",
+      };
+      await harness.emitAndDrain([
+        { ...base, type: "turn.started", eventId: asEventId("parent-start"), payload: {} },
+        ...[
+          ["child-a", "message"],
+          ["child-a", "second"],
+          ["child-b", "message"],
+        ].map(([agentId, itemId]) => ({
+          ...base,
+          type: "content.delta",
+          eventId: asEventId(`delta-${agentId}-${itemId}`),
+          itemId,
+          payload: { streamKind: "assistant_text", delta: `${agentId} unfinished text`, agentId },
+        })),
+        {
+          ...base,
+          type: "turn.completed",
+          eventId: asEventId("parent-end"),
+          payload: { state: "completed" },
+        },
+      ]);
+      const pendingMessages = (await harness.readModel()).threads[0]!.messages;
+      expect(pendingMessages.every((message) => message.streaming)).toBe(true);
+      await harness.emitAndDrain([
+        {
+          ...base,
+          type: status === "task.completed" ? "task.completed" : "task.updated",
+          eventId: asEventId("child-stop"),
+          payload: {
+            taskId: "child-a",
+            status: status === "task.completed" ? "completed" : status,
+          },
+        },
+      ]);
+      let messages = (await harness.readModel()).threads[0]!.messages;
+      expect(messages.filter((message) => message.agentId === "child-a")).toMatchObject([
+        { text: "child-a unfinished text", streaming: false, turnId: base.turnId },
+        { text: "child-a unfinished text", streaming: false, turnId: base.turnId },
+      ]);
+      expect(messages.filter((message) => message.agentId === "child-b")).toEqual(
+        pendingMessages.filter((message) => message.agentId === "child-b"),
+      );
+      await harness.emitAndDrain([
+        {
+          ...base,
+          type: "item.completed",
+          eventId: asEventId("late-child-item-complete"),
+          itemId: "message",
+          payload: {
+            itemType: "assistant_message",
+            detail: "child-a unfinished text",
+            agentId: "child-a",
+          },
+        },
+        { ...base, type: "session.exited", eventId: asEventId("session-exit"), payload: {} },
+        { ...base, type: "session.exited", eventId: asEventId("repeated-exit"), payload: {} },
+      ]);
+      messages = (await harness.readModel()).threads[0]!.messages;
+      expect(messages.map((message) => [message.agentId, message.text, message.streaming])).toEqual(
+        [
+          ["child-a", "child-a unfinished text", false],
+          ["child-a", "child-a unfinished text", false],
+          ["child-b", "child-b unfinished text", false],
+        ],
+      );
+    },
+  );
+
   it("projects native goal notifications onto the thread and drops repeated snapshots", async () => {
     const harness = await createHarness();
     const goal = {

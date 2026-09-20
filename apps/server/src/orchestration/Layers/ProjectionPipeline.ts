@@ -1162,6 +1162,7 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
               turnId: event.payload.turnId,
               role: event.payload.role,
               text: event.payload.text,
+              ...(event.payload.agentId ? { agentId: event.payload.agentId } : {}),
               ...(attachments !== undefined ? { attachments: [...attachments] } : {}),
               ...(event.payload.context !== undefined ? { context: event.payload.context } : {}),
               createdAt: event.payload.createdAt,
@@ -1191,6 +1192,9 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
             turnId: event.payload.turnId,
             role: event.payload.role,
             text: nextText,
+            ...((event.payload.agentId ?? previousMessage?.agentId) !== undefined
+              ? { agentId: event.payload.agentId ?? previousMessage?.agentId }
+              : {}),
             ...(nextAttachments !== undefined ? { attachments: [...nextAttachments] } : {}),
             ...((event.payload.context ?? previousMessage?.context) !== undefined
               ? { context: event.payload.context ?? previousMessage?.context }
@@ -1587,7 +1591,11 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
         }
 
         case "thread.message-sent": {
-          if (event.payload.turnId === null || event.payload.role !== "assistant") {
+          if (
+            event.payload.turnId === null ||
+            event.payload.role !== "assistant" ||
+            event.payload.agentId !== undefined
+          ) {
             return;
           }
           // A completed assistant message only settles the turn once the

@@ -166,6 +166,92 @@ const peerPath = NodePath.join(
 );
 
 describe("CodexSessionRuntime collab integration", () => {
+  it.effect(
+    "routes child transcripts before and after registration without leaking into the root",
+    () =>
+      Effect.gen(function* () {
+        const delta = (threadId: string, text: string) => ({
+          method: "item/agentMessage/delta",
+          params: { threadId, turnId: `${threadId}-turn`, itemId: "message", delta: text },
+        });
+        const complete = (threadId: string) => ({
+          method: "item/completed",
+          params: {
+            completedAtMs: 0,
+            threadId,
+            turnId: `${threadId}-turn`,
+            item: {
+              type: "agentMessage",
+              id: "message",
+              text: "Child reply",
+              phase: "final_answer",
+            },
+          },
+        });
+        const script = {
+          rootThreadId: ROOT,
+          notifications: [
+            delta(CHILD_A, "Before registration"),
+            capturedStartedActivity(),
+            delta(CHILD_A, "After registration"),
+            complete(CHILD_A),
+            delta(CHILD_B, "Sibling"),
+            complete(CHILD_B),
+            {
+              ...capturedSpawnedThread(MEMORY),
+              params: {
+                thread: {
+                  ...capturedSpawnedThread(MEMORY).params.thread,
+                  source: "unknown",
+                  threadSource: "memory_consolidation",
+                },
+              },
+            },
+            delta(MEMORY, "Internal memory"),
+            complete(MEMORY),
+            delta(ROOT, "Root reply"),
+          ],
+        };
+        // @effect-diagnostics-next-line preferSchemaOverJson:off
+        NodeFS.writeFileSync(scriptPath, JSON.stringify(script), "utf8");
+        yield* Effect.addFinalizer(() =>
+          Effect.sync(() => NodeFS.rmSync(scriptPath, { force: true })),
+        );
+        const runtime = yield* makeCodexSessionRuntime({
+          threadId: ThreadId.make("thread-transcripts"),
+          binaryPath: peerPath,
+          cwd: NodeOS.tmpdir(),
+          runtimeMode: "full-access",
+          environment: { ...process.env, T3_CODEX_COLLAB_SCRIPT: scriptPath },
+        });
+        const eventsFiber = yield* runtime.events.pipe(
+          Stream.takeUntil((event) => event.method === "turn/completed"),
+          Stream.runCollect,
+          Effect.forkScoped,
+        );
+        yield* runtime.start();
+        const turn = yield* runtime.sendTurn({ input: "Exercise transcript routing" });
+        const events = Array.from(yield* Fiber.join(eventsFiber));
+        const transcripts = events.filter((event) => event.method === "collabAgent/transcript");
+        assert.deepEqual(
+          transcripts.map((event) => (event.payload as { agentThreadId: string }).agentThreadId),
+          [CHILD_A, CHILD_A, CHILD_A, CHILD_B, CHILD_B],
+        );
+        assert.deepEqual(
+          transcripts.map((event) => [String(event.itemId), String(event.turnId)]),
+          transcripts.map(() => ["message", turn.turnId]),
+        );
+        assert.deepEqual(
+          events
+            .filter((event) => event.method === "item/agentMessage/delta")
+            .map((event) => event.textDelta),
+          ["Root reply"],
+        );
+        assert.isFalse(events.some((event) => event.method === "item/completed"));
+        yield* runtime.close;
+      }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  );
+
   it.effect("looks up child model metadata once after activity registration", () =>
     Effect.gen(function* () {
       const script = {
