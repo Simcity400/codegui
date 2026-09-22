@@ -1559,11 +1559,10 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
           }
         }
         const adapter = yield* registry.getByInstance(resolvedInstanceId);
-        if (
-          transferSource !== undefined &&
-          adapter.transferSession !== undefined &&
-          effectiveResumeCursor !== undefined
-        ) {
+        if (transferSource !== undefined && effectiveResumeCursor !== undefined) {
+          // Shared native history can have only one writer, even when the
+          // destination does not need a transfer hook (for example, Codex).
+          // Release the source before attempting to resume the destination.
           const sourceAdapter = yield* registry.getByInstance(transferSource.instanceId);
           const sourceSession = (yield* sourceAdapter.listSessions()).find(
             (session) => session.threadId === threadId,
@@ -1584,10 +1583,12 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
               runtimePayload: { activeTurnId: null },
             });
           }
-          yield* adapter.transferSession({
-            source: transferSource.continuationIdentity,
-            resumeCursor: effectiveResumeCursor,
-          });
+          if (adapter.transferSession !== undefined) {
+            yield* adapter.transferSession({
+              source: transferSource.continuationIdentity,
+              resumeCursor: effectiveResumeCursor,
+            });
+          }
         }
         yield* clearTurnAnalyticsSession(resolvedInstanceId, threadId);
         yield* prepareMcpSession(threadId, resolvedInstanceId);

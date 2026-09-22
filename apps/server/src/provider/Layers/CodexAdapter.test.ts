@@ -288,6 +288,32 @@ const validationLayer = it.layer(
 );
 
 validationLayer("CodexAdapterLive validation", (it) => {
+  it.effect("rejects invalid resume state instead of starting a fresh runtime", () =>
+    Effect.gen(function* () {
+      const adapter = yield* CodexAdapter;
+      const startsBefore = validationRuntimeFactory.factory.mock.calls.length;
+      for (const resumeCursor of [null, {}, { threadId: 42 }, { sessionId: "wrong-format" }]) {
+        const result = yield* adapter
+          .startSession({
+            threadId: asThreadId("invalid-resume"),
+            runtimeMode: "full-access",
+            resumeCursor,
+          })
+          .pipe(Effect.result);
+        NodeAssert.equal(result._tag, "Failure");
+        NodeAssert.deepStrictEqual(
+          result.failure,
+          new ProviderAdapterValidationError({
+            provider: ProviderDriverKind.make("codex"),
+            operation: "startSession",
+            issue: "Invalid Codex resume state. Cannot resume the original thread.",
+          }),
+        );
+      }
+      NodeAssert.equal(validationRuntimeFactory.factory.mock.calls.length, startsBefore);
+    }),
+  );
+
   it.effect("returns validation error for non-codex provider on startSession", () =>
     Effect.gen(function* () {
       const adapter = yield* CodexAdapter;

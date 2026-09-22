@@ -1049,6 +1049,119 @@ for (const driverKind of [CODEX_DRIVER, CLAUDE_AGENT_DRIVER]) {
     },
   });
   accountRouting.layer(`${driverKind} account continuation`, (it) => {
+    it.effect("releases the active writer before resuming another account and switching back", () =>
+      Effect.gen(function* () {
+        const provider = yield* ProviderService.ProviderService;
+        const threadId = asThreadId(`${driverKind}-active-account-switch`);
+        const cwd = fixtureCwd(`${driverKind}-active-account-switch`);
+        yield* provider.startSession(threadId, {
+          threadId,
+          providerInstanceId: personalId,
+          runtimeMode: "full-access",
+          cwd,
+        });
+
+        for (const [instanceId, source, target] of [
+          [workId, personal, work],
+          [personalId, work, personal],
+        ] as const) {
+          const resumeCursor = { opaque: `latest-context-before-${instanceId}` };
+          source.updateSession(threadId, (session) => ({ ...session, resumeCursor }));
+          const start = target.startSession.getMockImplementation()!;
+          target.startSession.mockImplementationOnce((input) =>
+            Effect.gen(function* () {
+              if (yield* source.adapter.hasSession(threadId)) {
+                return yield* new ProviderAdapterRequestError({
+                  provider: driverKind,
+                  method: "thread/resume",
+                  detail: `thread ${threadId} already has an active writer`,
+                });
+              }
+              return yield* start(input);
+            }),
+          );
+          const session = yield* provider.startSession(threadId, {
+            threadId,
+            providerInstanceId: instanceId,
+            runtimeMode: "full-access",
+          });
+          assert.equal(session.providerInstanceId, instanceId);
+          assert.deepEqual(session.resumeCursor, resumeCursor);
+          assert.equal(session.cwd, cwd);
+          yield* provider.sendTurn({ threadId, input: "continue the conversation" });
+        }
+      }),
+    );
+
+    it.effect("can retry an account resume failure without a transfer hook or server restart", () =>
+      Effect.gen(function* () {
+        const provider = yield* ProviderService.ProviderService;
+        const directory = yield* ProviderSessionDirectory.ProviderSessionDirectory;
+        const threadId = asThreadId(`${driverKind}-resume-failure`);
+        yield* provider.startSession(threadId, {
+          threadId,
+          providerInstanceId: personalId,
+          runtimeMode: "full-access",
+        });
+        const resumeCursor = { opaque: "latest-context-before-failure" };
+        personal.updateSession(threadId, (session) => ({ ...session, resumeCursor }));
+        work.startSession.mockImplementationOnce(() =>
+          Effect.fail(
+            new ProviderAdapterRequestError({
+              provider: driverKind,
+              method: "thread/resume",
+              detail: "Resume failed",
+            }),
+          ),
+        );
+        const input = { threadId, providerInstanceId: workId, runtimeMode: "full-access" } as const;
+        yield* Effect.flip(provider.startSession(threadId, input));
+        assert.equal(yield* personal.adapter.hasSession(threadId), false);
+        const binding = Option.getOrThrow(yield* directory.getBinding(threadId));
+        assert.equal(binding.providerInstanceId, personalId);
+        assert.equal(binding.status, "stopped");
+        assert.deepEqual(binding.resumeCursor, resumeCursor);
+
+        const session = yield* provider.startSession(threadId, input);
+        assert.equal(session.providerInstanceId, workId);
+        assert.deepEqual(session.resumeCursor, resumeCursor);
+        yield* provider.sendTurn({ threadId, input: "continue after retry" });
+      }),
+    );
+
+    it.effect("does not resume the new account when stopping the old writer fails", () =>
+      Effect.gen(function* () {
+        const provider = yield* ProviderService.ProviderService;
+        const directory = yield* ProviderSessionDirectory.ProviderSessionDirectory;
+        const threadId = asThreadId(`${driverKind}-stop-failure`);
+        yield* provider.startSession(threadId, {
+          threadId,
+          providerInstanceId: personalId,
+          runtimeMode: "full-access",
+        });
+        personal.stopSession.mockImplementationOnce(() =>
+          Effect.fail(
+            new ProviderAdapterRequestError({
+              provider: driverKind,
+              method: "session/stop",
+              detail: "Stop failed",
+            }),
+          ),
+        );
+        const startsBefore = work.startSession.mock.calls.length;
+        const input = { threadId, providerInstanceId: workId, runtimeMode: "full-access" } as const;
+        const failure = yield* Effect.flip(provider.startSession(threadId, input));
+        assert.instanceOf(failure, ProviderAdapterRequestError);
+        assert.equal(work.startSession.mock.calls.length, startsBefore);
+        assert.equal(yield* personal.adapter.hasSession(threadId), true);
+        const binding = Option.getOrThrow(yield* directory.getBinding(threadId));
+        assert.equal(binding.providerInstanceId, personalId);
+
+        yield* provider.startSession(threadId, input);
+        yield* provider.sendTurn({ threadId, input: "continue after retrying stop" });
+      }),
+    );
+
     it.effect(
       "stops the old account before transfer and retains its binding if transfer fails",
       () =>

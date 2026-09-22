@@ -2335,6 +2335,14 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
           });
         }
 
+        if (input.resumeCursor !== undefined && !isCodexResumeCursorSchema(input.resumeCursor)) {
+          return yield* new ProviderAdapterValidationError({
+            provider: PROVIDER,
+            operation: "startSession",
+            issue: "Invalid Codex resume state. Cannot resume the original thread.",
+          });
+        }
+
         const existing = sessions.get(input.threadId);
         if (existing && !existing.stopped) {
           yield* Effect.suspend(() => stopSessionInternal(existing));

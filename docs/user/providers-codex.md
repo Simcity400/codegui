@@ -54,7 +54,9 @@ not move the conversation into a separate Codex home.
 
 When an account reaches its usage limit, select another signed-in account and send
 your message again in the same thread. Its saved context is retained, including
-after the session has stopped. Two provider entries signed into the same account
+after the session has stopped. If the original Codex thread cannot be resumed,
+T3 Code shows an error instead of starting a new conversation.
+Two provider entries signed into the same account
 share its usage limit; changing the entry's name does not give it separate quota.
 
 If the account is missing from the picker, compare the home paths in provider
