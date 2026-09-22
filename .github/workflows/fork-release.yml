@@ -81,7 +81,8 @@ jobs:
   build:
     name: Build Windows ${{ matrix.arch }}
     needs: [prepare]
-    if: needs.prepare.outputs.ready == 'true' && github.repository == 'Simcity400/t3code-personal'
+    # Stable across personal repository renames.
+    if: needs.prepare.outputs.ready == 'true' && github.repository_id == '1316734485'
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 60
     strategy:

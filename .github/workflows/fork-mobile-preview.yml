@@ -46,7 +46,8 @@ concurrency:
 jobs:
   deploy:
     name: Publish updates and budget native builds
-    if: github.repository == 'Simcity400/t3code-personal'
+    # Stable across personal repository renames.
+    if: github.repository_id == '1316734485'
     runs-on: ubuntu-latest
     timeout-minutes: 45
     permissions:
