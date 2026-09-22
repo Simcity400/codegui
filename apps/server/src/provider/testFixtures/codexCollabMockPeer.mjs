@@ -162,6 +162,10 @@ rl.on("line", (line) => {
     for (const notification of script.notifications) {
       write({ jsonrpc: "2.0", method: notification.method, params: notification.params });
     }
+    if (script.breakProtocolAfterTurnStart) {
+      process.stdout.write("{broken protocol message\n");
+      return;
+    }
     for (const [index, request] of (script.serverRequests ?? []).entries()) {
       if (request.id !== undefined) {
         // Legacy form: caller-supplied JSON-RPC ids recorded in .responses.

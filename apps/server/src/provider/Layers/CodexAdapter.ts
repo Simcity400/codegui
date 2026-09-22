@@ -1506,13 +1506,13 @@ function mapToRuntimeEvents(
     ];
   }
 
-  if (event.method === "session/ready") {
+  if (event.method === "session/ready" || event.method === "session/error") {
     return [
       {
         ...runtimeEventBase(event, canonicalThreadId),
         type: "session.state.changed",
         payload: {
-          state: "ready",
+          state: event.method === "session/error" ? "error" : "ready",
           ...(event.message ? { reason: event.message } : {}),
         },
       },

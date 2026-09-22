@@ -3172,6 +3172,35 @@ function codexUsageLimitTurnFailed(id: string, turnId = "turn-limit"): ProviderE
 }
 
 usageLimitLayer("CodexAdapterLive usage limits", (it) => {
+  it.effect(
+    "forwards connection failures as session errors instead of leaving the thread running",
+    () =>
+      Effect.gen(function* () {
+        const { adapter, runtime } = yield* startUsageLimitRuntime();
+        const eventsFiber = yield* adapter.streamEvents.pipe(
+          Stream.take(1),
+          Stream.runCollect,
+          Effect.forkChild,
+        );
+        const message = "Codex connection failed: Invalid protocol message";
+        yield* runtime.emit({
+          id: asEventId("evt-connection-failed"),
+          kind: "session",
+          provider: ProviderDriverKind.make("codex"),
+          threadId: asThreadId("thread-1"),
+          createdAt: USAGE_LIMIT_NOW,
+          method: "session/error",
+          message,
+        });
+        const events = yield* Fiber.join(eventsFiber);
+        const event = events[0];
+        NodeAssert.equal(event?.type, "session.state.changed");
+        if (event?.type === "session.state.changed") {
+          NodeAssert.deepStrictEqual(event.payload, { state: "error", reason: message });
+        }
+      }),
+  );
+
   it.effect("names the exhausted window and the workspace's missing credits", () =>
     Effect.gen(function* () {
       const { adapter, runtime } = yield* startUsageLimitRuntime();

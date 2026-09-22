@@ -20,6 +20,7 @@ import {
 import { resolveSpawnCommand } from "@t3tools/shared/shell";
 import { normalizeModelSlug } from "@t3tools/shared/model";
 import * as Crypto from "effect/Crypto";
+import * as Cause from "effect/Cause";
 import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
@@ -1392,10 +1393,10 @@ export const makeCodexSessionRuntime = (
         ),
       );
 
-    const clientContext = yield* CodexClient.layerChildProcess(child).pipe(
-      Layer.build,
-      Effect.provideService(Scope.Scope, runtimeScope),
-    );
+    const transportTerminated = yield* Deferred.make<CodexErrors.CodexAppServerError>();
+    const clientContext = yield* CodexClient.layerChildProcess(child, {
+      onTermination: (error) => Deferred.succeed(transportTerminated, error).pipe(Effect.asVoid),
+    }).pipe(Layer.build, Effect.provideService(Scope.Scope, runtimeScope));
     const client = yield* Effect.service(CodexClient.CodexAppServerClient).pipe(
       Effect.provide(clientContext),
     );
@@ -1446,6 +1447,30 @@ export const makeCodexSessionRuntime = (
         method,
         message,
       });
+
+    const reportConnectionFailure = Effect.fn("CodexSessionRuntime.reportConnectionFailure")(
+      function* (detail: string) {
+        if (yield* Ref.get(closedRef)) return;
+        const message = `Codex connection failed: ${detail}`;
+        yield* updateSession(sessionRef, {
+          status: "error",
+          activeTurnId: undefined,
+          lastError: message,
+        });
+        yield* emitSessionEvent("session/error", message);
+      },
+    );
+
+    // A broken protocol reader need not terminate the provider process.
+    // Surface it independently of exitCode so the UI cannot keep running forever.
+    yield* Deferred.await(transportTerminated).pipe(
+      Effect.flatMap((error) =>
+        error._tag === "CodexAppServerProcessExitedError"
+          ? Effect.void
+          : reportConnectionFailure(error.message),
+      ),
+      Effect.forkIn(runtimeScope),
+    );
 
     const updateCollabChildMetadata = (
       agentThreadId: string,
@@ -2454,6 +2479,11 @@ export const makeCodexSessionRuntime = (
 
     yield* Stream.fromQueue(serverNotifications).pipe(
       Stream.runForEach(handleRawNotification),
+      Effect.catchCause((cause) =>
+        Cause.hasInterruptsOnly(cause)
+          ? Effect.interrupt
+          : reportConnectionFailure(Cause.pretty(cause)),
+      ),
       Effect.forkIn(runtimeScope),
     );
 

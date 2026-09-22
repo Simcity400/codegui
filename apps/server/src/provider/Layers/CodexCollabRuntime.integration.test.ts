@@ -166,6 +166,47 @@ const peerPath = NodePath.join(
 );
 
 describe("CodexSessionRuntime collab integration", () => {
+  it.effect("reports a broken connection even while the Codex process remains alive", () =>
+    Effect.gen(function* () {
+      NodeFS.writeFileSync(
+        scriptPath,
+        // @effect-diagnostics-next-line preferSchemaOverJson:off
+        JSON.stringify({
+          rootThreadId: ROOT,
+          notifications: [],
+          breakProtocolAfterTurnStart: true,
+        }),
+      );
+      yield* Effect.addFinalizer(() =>
+        Effect.sync(() => NodeFS.rmSync(scriptPath, { force: true })),
+      );
+      const runtime = yield* makeCodexSessionRuntime({
+        threadId: ThreadId.make("thread-broken-connection"),
+        binaryPath: peerPath,
+        cwd: NodeOS.tmpdir(),
+        runtimeMode: "full-access",
+        environment: { ...process.env, T3_CODEX_COLLAB_SCRIPT: scriptPath },
+      });
+      const eventsFiber = yield* runtime.events.pipe(
+        Stream.takeUntil((event) => event.method === "session/error"),
+        Stream.runCollect,
+        Effect.forkScoped,
+      );
+      yield* runtime.start();
+      yield* runtime.sendTurn({ input: "Exercise connection failure" });
+      const events = yield* Fiber.join(eventsFiber);
+      const failure = events.at(-1);
+      assert.equal(failure?.method, "session/error");
+      assert.include(failure?.message, "Codex connection failed:");
+      const session = yield* runtime.getSession;
+      assert.equal(session.status, "error");
+      assert.isUndefined(session.activeTurnId);
+      assert.equal(session.lastError, failure?.message);
+      assert.isFalse(events.some((event) => event.method === "session/exited"));
+      yield* runtime.close;
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  );
+
   it.effect(
     "routes child transcripts before and after registration without leaking into the root",
     () =>
