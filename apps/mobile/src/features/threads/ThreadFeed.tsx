@@ -2981,7 +2981,9 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
             }
             contentContainerStyle={{
               paddingTop: 12,
-              paddingBottom: props.contentBottomPadding ?? 0,
+              ...(props.contentBottomPadding === undefined
+                ? {}
+                : { paddingBottom: props.contentBottomPadding }),
               paddingHorizontal: contentHorizontalPadding,
             }}
           />

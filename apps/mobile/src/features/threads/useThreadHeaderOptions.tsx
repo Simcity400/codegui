@@ -1,5 +1,6 @@
 import { StackActions, useNavigation } from "@react-navigation/native";
-import { useMemo } from "react";
+import { HeaderBackContext } from "@react-navigation/elements";
+import { useContext, useMemo } from "react";
 import type { AppNativeStackNavigationOptions } from "../../native/StackHeader";
 import { useAdaptiveWorkspaceLayout } from "../layout/AdaptiveWorkspaceLayout";
 import { withNativeGlassHeaderItem } from "../layout/native-glass-header-items";
@@ -67,7 +68,11 @@ export function useThreadHeaderOptions(props: {
   // Deep links / cold starts land with Thread as the ONLY route, where the
   // native back button does not render. Provide an explicit Home escape for
   // that case; when history exists the native back button is used instead.
-  const canGoBack = navigation.canGoBack();
+  // canGoBack() describes the focused route. While Agents or a sheet is
+  // open, it can be true even when this thread is the first stack entry.
+  // Use this screen's native predecessor so background updates cannot remove
+  // its Home control and leave no way out when the covering screen closes.
+  const canGoBack = useContext(HeaderBackContext) !== undefined;
   const compactHomeHeaderItems = useMemo<NativeHeaderItems>(
     () => [
       withNativeGlassHeaderItem({
