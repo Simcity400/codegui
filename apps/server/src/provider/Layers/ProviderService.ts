@@ -1446,6 +1446,9 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
           );
         }
         const persistedBinding = Option.getOrUndefined(yield* directory.getBinding(threadId));
+        let hasCompatiblePersistedBinding =
+          persistedBinding?.provider === resolvedProvider &&
+          persistedBinding.providerInstanceId === resolvedInstanceId;
         if (
           persistedBinding?.provider === resolvedProvider &&
           persistedBinding.providerInstanceId !== resolvedInstanceId &&
@@ -1465,9 +1468,11 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
               `Thread '${threadId}' cannot switch from instance '${previousInstanceId}' to '${resolvedInstanceId}' because their provider resume state is incompatible.`,
             );
           }
+          hasCompatiblePersistedBinding = true;
         }
         const hasCompatiblePersistedCursor =
-          persistedBinding?.providerInstanceId === resolvedInstanceId &&
+          hasCompatiblePersistedBinding &&
+          persistedBinding !== undefined &&
           persistedBinding.resumeCursor !== null &&
           persistedBinding.resumeCursor !== undefined;
         const shouldForkFromParent =
@@ -1517,7 +1522,7 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
               : undefined);
         const effectiveCwd =
           input.cwd ??
-          (persistedBinding?.providerInstanceId === resolvedInstanceId
+          (hasCompatiblePersistedBinding && persistedBinding !== undefined
             ? readPersistedCwd(persistedBinding.runtimePayload)
             : undefined);
         yield* Effect.annotateCurrentSpan({
@@ -1525,16 +1530,14 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
           "provider.resume_cursor.source":
             input.resumeCursor !== undefined
               ? "request"
-              : effectiveResumeCursor !== undefined &&
-                  persistedBinding?.providerInstanceId === resolvedInstanceId
+              : effectiveResumeCursor !== undefined && hasCompatiblePersistedBinding
                 ? "persisted"
                 : "none",
           "provider.resume_cursor.present": effectiveResumeCursor !== undefined,
           "provider.cwd.source":
             input.cwd !== undefined
               ? "request"
-              : effectiveCwd !== undefined &&
-                  persistedBinding?.providerInstanceId === resolvedInstanceId
+              : effectiveCwd !== undefined && hasCompatiblePersistedBinding
                 ? "persisted"
                 : "none",
           "provider.cwd.effective": effectiveCwd ?? "",

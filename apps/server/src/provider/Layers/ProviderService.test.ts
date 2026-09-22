@@ -1018,6 +1018,90 @@ it.effect("ProviderServiceLive rejects new sessions for disabled custom instance
 
 const routing = makeProviderServiceLayer();
 
+for (const driverKind of [CODEX_DRIVER, CLAUDE_AGENT_DRIVER]) {
+  const workId = ProviderInstanceId.make(`${driverKind}-work`);
+  const personalId = ProviderInstanceId.make(`${driverKind}-personal`);
+  const isolatedId = ProviderInstanceId.make(`${driverKind}-isolated`);
+  const work = makeFakeCodexAdapter(driverKind);
+  const personal = makeFakeCodexAdapter(driverKind);
+  const isolated = makeFakeCodexAdapter(driverKind);
+  const baseRegistry = makeStaticInstanceRegistry([
+    [workId, work.adapter],
+    [personalId, personal.adapter],
+    [isolatedId, isolated.adapter],
+  ]);
+  const accountRouting = makeProviderServiceLayer({
+    registry: {
+      ...baseRegistry,
+      getInstanceInfo: (instanceId) =>
+        baseRegistry.getInstanceInfo(instanceId).pipe(
+          Effect.map((info) => ({
+            ...info,
+            continuationIdentity: {
+              driverKind,
+              continuationKey: instanceId === isolatedId ? "isolated" : "shared",
+            },
+          })),
+        ),
+    },
+  });
+  accountRouting.layer(`${driverKind} account continuation`, (it) => {
+    it.effect("keeps stopped thread context and workspace when switching accounts and back", () =>
+      Effect.gen(function* () {
+        const provider = yield* ProviderService.ProviderService;
+        const threadId = asThreadId(`${driverKind}-account-switch`);
+        const cwd = fixtureCwd(`${driverKind}-account-switch`);
+        const resumeCursor = { opaque: "existing-conversation-with-agents" };
+        yield* provider.startSession(threadId, {
+          threadId,
+          providerInstanceId: workId,
+          runtimeMode: "full-access",
+          cwd,
+          resumeCursor,
+        });
+        work.sendTurn.mockImplementationOnce(() =>
+          Effect.fail(
+            new ProviderAdapterRequestError({
+              provider: driverKind,
+              method: "turn/start",
+              detail: "Usage limit reached",
+            }),
+          ),
+        );
+        const exhausted = yield* Effect.flip(provider.sendTurn({ threadId, input: "continue" }));
+        assert.instanceOf(exhausted, ProviderAdapterRequestError);
+        yield* provider.stopSession({ threadId });
+        for (const [instanceId, adapter] of [
+          [personalId, personal],
+          [workId, work],
+        ] as const) {
+          const session = yield* provider.startSession(threadId, {
+            threadId,
+            providerInstanceId: instanceId,
+            runtimeMode: "full-access",
+          });
+          assert.equal(session.threadId, threadId);
+          assert.equal(session.providerInstanceId, instanceId);
+          assert.deepEqual(adapter.startSession.mock.calls.at(-1)?.[0].resumeCursor, resumeCursor);
+          assert.equal(adapter.startSession.mock.calls.at(-1)?.[0].cwd, cwd);
+          yield* provider.sendTurn({ threadId, input: "continue after switching accounts" });
+          assert.equal(adapter.sendTurn.mock.calls.at(-1)?.[0].threadId, threadId);
+          yield* provider.stopSession({ threadId });
+        }
+        const failure = yield* Effect.flip(
+          provider.startSession(threadId, {
+            threadId,
+            providerInstanceId: isolatedId,
+            runtimeMode: "full-access",
+          }),
+        );
+        assert.instanceOf(failure, ProviderValidationError);
+        assert.equal(isolated.startSession.mock.calls.length, 0);
+      }),
+    );
+  });
+}
+
 const customCompactionDriver = ProviderDriverKind.make("custom-compaction-provider");
 const nativeCompactionInstanceId = ProviderInstanceId.make("native-compaction");
 const slashCompactionInstanceId = ProviderInstanceId.make("slash-compaction");

@@ -28,6 +28,26 @@ export type ProviderGroup = {
   readonly models: ReadonlyArray<ModelOption>;
 };
 
+/** Offer accounts that can resume the same provider conversation. */
+export function filterThreadProviderGroups(
+  groups: ReadonlyArray<ProviderGroup>,
+  config: T3ServerConfig | null | undefined,
+  instanceId: ModelSelection["instanceId"],
+): ReadonlyArray<ProviderGroup> {
+  const current = config?.providers.find((provider) => provider.instanceId === instanceId);
+  return groups.filter((group) => {
+    if (group.providerKey === instanceId) return true;
+    if (!current?.continuation?.groupKey) return false;
+    const candidate = config?.providers.find(
+      (provider) => provider.instanceId === group.providerKey,
+    );
+    return (
+      candidate?.driver === current.driver &&
+      candidate.continuation?.groupKey === current.continuation.groupKey
+    );
+  });
+}
+
 function providerDisplayLabel(provider: {
   readonly displayName?: string | undefined;
   readonly driver: string;
