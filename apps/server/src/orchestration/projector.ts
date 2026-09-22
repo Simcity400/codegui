@@ -66,7 +66,11 @@ function retainThreadActivities(activities: OrchestrationThread["activities"]) {
   const recentStart = activities.length - 500;
   if (recentStart <= 0) return activities;
   const pending = new Map<string, OrchestrationThread["activities"][number]>();
+  let latestSessionReset: OrchestrationThread["activities"][number] | undefined;
   for (const activity of activities) {
+    if (activity.kind === "session.reset" || activity.kind === "runtime.error") {
+      latestSessionReset = activity;
+    }
     if (!Predicate.isObject(activity.payload)) continue;
     const requestId = activity.payload.requestId;
     if (typeof requestId !== "string") continue;
@@ -80,6 +84,7 @@ function retainThreadActivities(activities: OrchestrationThread["activities"]) {
   return activities.filter(
     (activity, index) =>
       index >= recentStart ||
+      activity === latestSessionReset ||
       pendingActivities.has(activity) ||
       // The worktree setup record is upserted under one id for the thread's
       // whole life and is the only durable copy of a running setup; an async

@@ -3290,6 +3290,44 @@ projectionSnapshotLayer("ProjectionSnapshotQuery windowed thread detail", (it) =
         assert.equal(ids.has(asEventId("task-usage:thread-w:failed-late")), false);
       }
 
+      // Reconnecting after an error must not pin the previous session's
+      // orphaned tasks. Keep the boundary even when its turn is off-page.
+      yield* sql`
+        INSERT INTO projection_thread_activities (
+          activity_id, thread_id, turn_id, tone, kind, summary, payload_json, sequence, created_at
+        ) VALUES
+          ('session-failed', 'thread-w', 'turn-1', 'error', 'runtime.error', 'Usage limit',
+            '{"message":"Usage limit"}', 17, '2026-03-01T00:00:17.000Z'),
+          ('live-agent-resumed', 'thread-w', 'turn-1', 'info', 'task.updated', 'resumed',
+            '{"taskId":"live-agent","agentKind":"agent","status":"running"}',
+            18, '2026-03-01T00:00:18.000Z')
+      `;
+      const resumedWindow = yield* snapshotQuery.getThreadDetailSnapshot(threadW, { turnLimit: 2 });
+      assert.equal(resumedWindow._tag, "Some");
+      if (resumedWindow._tag === "Some") {
+        const ids = new Set(resumedWindow.value.thread.activities.map((activity) => activity.id));
+        assert.equal(ids.has(asEventId("session-failed")), true);
+        assert.equal(ids.has(asEventId("live-shell-start")), false);
+        assert.equal(ids.has(asEventId("resumed-start-2")), false);
+        assert.equal(ids.has(asEventId("workflow-start")), false);
+        assert.equal(ids.has(asEventId("live-agent-start")), true);
+        assert.equal(ids.has(asEventId("live-agent-resumed")), true);
+      }
+      yield* sql`
+        UPDATE projection_thread_activities SET kind = 'session.reset'
+        WHERE activity_id = 'session-failed'
+      `;
+      const restartedWindow = yield* snapshotQuery.getThreadDetailSnapshot(threadW, {
+        turnLimit: 2,
+      });
+      assert.equal(restartedWindow._tag, "Some");
+      if (restartedWindow._tag === "Some" && resumedWindow._tag === "Some") {
+        assert.deepEqual(
+          restartedWindow.value.thread.activities.map((activity) => activity.id),
+          resumedWindow.value.thread.activities.map((activity) => activity.id),
+        );
+      }
+
       // A dead session has nothing left to finish: no task scan, no pins.
       yield* sql`UPDATE projection_thread_sessions SET status = 'stopped' WHERE thread_id = 'thread-w'`;
       const stoppedWindow = yield* snapshotQuery.getThreadDetailSnapshot(threadW, {

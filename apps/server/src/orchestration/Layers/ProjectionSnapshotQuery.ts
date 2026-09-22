@@ -1842,7 +1842,15 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
   });
 
   const pinnedThreadActivityIdsCte = (threadId: string, includeLiveTasks: boolean) => sql`
-pending_approval_requests AS (
+        latest_session_reset AS (
+          SELECT activity_id, sequence, created_at
+          FROM projection_thread_activities
+          WHERE thread_id = ${threadId}
+            AND kind IN ('session.reset', 'runtime.error')
+          ORDER BY sequence DESC, created_at DESC, activity_id DESC
+          LIMIT 1
+        ),
+        pending_approval_requests AS (
           SELECT request_id, thread_id
           FROM projection_pending_approvals
           WHERE thread_id = ${threadId}
@@ -1898,6 +1906,8 @@ pending_approval_requests AS (
         ),
         ${includeLiveTasks ? liveTaskPinCtes(threadId) : sql``}
         pinned_activity_ids AS (
+          SELECT activity_id FROM latest_session_reset
+          UNION ALL
           SELECT activity_id
           FROM pending_approval_activities
           WHERE request_order = 1
@@ -1963,6 +1973,12 @@ pending_approval_requests AS (
               ORDER BY sequence DESC, created_at DESC, settled DESC, activity_id DESC
             ) AS vote_order
           FROM task_status_votes
+          WHERE created_at >= COALESCE((SELECT created_at FROM latest_session_reset), '')
+            AND (
+              sequence IS NULL
+              OR (SELECT sequence FROM latest_session_reset) IS NULL
+              OR sequence > (SELECT sequence FROM latest_session_reset)
+            )
         ),
         live_task_ids AS (
           SELECT task_id

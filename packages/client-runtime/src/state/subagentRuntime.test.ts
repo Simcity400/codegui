@@ -742,6 +742,40 @@ describe("background task exclusion", () => {
 });
 
 describe("session-derived interruption", () => {
+  it.each(["runtime.error", "session.reset"])(
+    "does not resurrect orphaned agents after %s when a new session runs",
+    (kind) => {
+      const rows = [
+        activity("task.started", { taskId: "orphan", taskType: "local_agent" }),
+        activity("task.started", { taskId: "resumed", taskType: "local_agent" }),
+        activity("task.started", { taskId: "shell", taskType: "local_bash", isBackgrounded: true }),
+        activity("task.updated", { taskId: "idle", status: "idle" }),
+        activity("task.completed", { taskId: "done", status: "completed" }),
+        activity(kind, {}),
+        activity("task.progress", {
+          taskId: "orphan",
+          usageSnapshot: true,
+          typedUsage: { totalTokens: 42 },
+        }),
+        activity("task.updated", { taskId: "resumed", status: "running" }),
+        activity("task.started", { taskId: "new", taskType: "local_agent" }),
+      ];
+      const { agents, backgroundTasks } = foldThreadTasks(rows, { sessionLive: true });
+      expect(agents.find((agent) => agent.id === "orphan")).toMatchObject({
+        status: "interrupted",
+        usage: { totalTokens: 42 },
+      });
+      expect(agents.find((agent) => agent.id === "resumed")).toMatchObject({
+        status: "running",
+        activationCount: 2,
+      });
+      expect(agents.find((agent) => agent.id === "new")?.status).toBe("running");
+      expect(agents.find((agent) => agent.id === "idle")?.status).toBe("idle");
+      expect(agents.find((agent) => agent.id === "done")?.status).toBe("completed");
+      expect(backgroundTasks[0]?.status).toBe("interrupted");
+    },
+  );
+
   it("dead session interrupts live agents but preserves idle and settled", () => {
     const rows = [
       activity("task.started", { taskId: "live-1", taskType: "local_agent" }),

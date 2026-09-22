@@ -265,6 +265,8 @@ export interface ThreadFeedProps {
   readonly contentInsetEndAdjustment: SharedValue<number>;
   readonly contentTopInset?: number;
   readonly contentBottomInset?: number;
+  readonly contentBottomPadding?: number;
+  readonly alignItemsAtEnd?: boolean;
   readonly contentMaxWidth?: number;
   readonly layoutVariant?: LayoutVariant;
   readonly usesAutomaticContentInsets?: boolean;
@@ -2961,7 +2963,7 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
             // viewport, pad above the content so messages rest just above the
             // composer instead of under the header. No effect on threads that
             // overflow the viewport (the padding clamps to zero).
-            alignItemsAtEnd
+            alignItemsAtEnd={props.alignItemsAtEnd ?? true}
             initialScrollAtEnd
             onScroll={handleScroll}
             onScrollBeginDrag={handleScrollBeginDrag}
@@ -2979,6 +2981,7 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
             }
             contentContainerStyle={{
               paddingTop: 12,
+              paddingBottom: props.contentBottomPadding ?? 0,
               paddingHorizontal: contentHorizontalPadding,
             }}
           />

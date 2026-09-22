@@ -544,6 +544,18 @@ export function foldThreadTasks(
   };
 
   for (const activity of activities) {
+    // The current session may already be running again. Keep its predecessors'
+    // orphaned tasks stopped even when their own terminal notifications were lost.
+    if (activity.kind === "session.reset" || activity.kind === "runtime.error") {
+      for (const roster of [agents, backgroundTasks]) {
+        for (const agent of roster.values()) {
+          if (isActiveSubagentStatus(agent.status)) {
+            applyStatus(agent, "interrupted", activity.createdAt);
+          }
+        }
+      }
+      continue;
+    }
     if (typeof activity.payload !== "object" || activity.payload === null) {
       continue;
     }

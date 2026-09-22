@@ -1171,7 +1171,7 @@ describe("orchestration projector", () => {
     expect(thread?.checkpoints.at(-1)?.turnId).toBe("turn-599");
   });
 
-  effectIt.effect("keeps the worktree setup record past the activity retention cap", () =>
+  effectIt.effect("retains setup and session boundaries past the activity cap", () =>
     Effect.gen(function* () {
       const createdAt = "2026-03-01T10:00:00.000Z";
       const threadId = "thread-setup-retained";
@@ -1225,15 +1225,18 @@ describe("orchestration projector", () => {
         afterCreate,
         activityEvent(2, `worktree-setup:${threadId}`, "worktree-setup"),
       );
+      model = yield* projectEvent(model, activityEvent(3, "old-session-error", "runtime.error"));
+      model = yield* projectEvent(model, activityEvent(4, "latest-session-reset", "session.reset"));
       for (let index = 0; index < 600; index += 1) {
         model = yield* projectEvent(
           model,
-          activityEvent(3 + index, `tool-${index}`, "tool.completed"),
+          activityEvent(5 + index, `tool-${index}`, "tool.completed"),
         );
       }
       const thread = model.threads.find((entry) => entry.id === threadId);
-      expect(thread?.activities).toHaveLength(501);
+      expect(thread?.activities).toHaveLength(502);
       expect(thread?.activities[0]?.id).toBe(`worktree-setup:${threadId}`);
+      expect(thread?.activities[1]?.id).toBe("latest-session-reset");
     }),
   );
 });

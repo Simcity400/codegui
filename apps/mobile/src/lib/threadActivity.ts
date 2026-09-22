@@ -1,4 +1,5 @@
 import * as Option from "effect/Option";
+import { isAgentMessage } from "@t3tools/client-runtime/state/agent-transcripts";
 import { foldUserInputActivities } from "@t3tools/client-runtime/work-log/user-input";
 import * as Schema from "effect/Schema";
 import {
@@ -2430,7 +2431,11 @@ export function buildThreadFeed(
   const entries = Arr.sortWith(
     [
       ...messages
-        .filter((message) => message.role !== "user" || !foldedAnswerMessageIds.has(message.id))
+        .filter(
+          (message) =>
+            !isAgentMessage(message) &&
+            (message.role !== "user" || !foldedAnswerMessageIds.has(message.id)),
+        )
         .map((message) => {
           let entry = messageEntriesCache.get(message);
           if (!entry) {

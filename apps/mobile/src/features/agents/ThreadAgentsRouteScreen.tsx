@@ -375,7 +375,7 @@ export function ThreadAgentTranscriptRouteScreen(
   const insets = useSafeAreaInsets();
 
   return (
-    <View className="flex-1 bg-screen" style={{ paddingBottom: insets.bottom + 16 }}>
+    <View className="flex-1 bg-screen">
       <NativeStackScreenOptions options={{ title: agent?.title ?? "Agent transcript" }} />
       <ThreadFeed
         key={agentId}
@@ -397,6 +397,10 @@ export function ThreadAgentTranscriptRouteScreen(
         contentInsetEndAdjustment={contentInsetEndAdjustment}
         contentTopInset={0}
         contentBottomInset={0}
+        // Keep the final row and its expanded details inside the list's
+        // measured scroll extent, including the home-indicator safe area.
+        contentBottomPadding={insets.bottom + 16}
+        alignItemsAtEnd={false}
         loadEarlier={loadEarlier}
       />
     </View>

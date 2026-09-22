@@ -1106,6 +1106,44 @@ describe("ProviderRuntimeIngestion", () => {
     expect(thread.session?.lastError).toBeNull();
   });
 
+  it("persists task reset boundaries across a provider restart without resetting on ready", async () => {
+    const harness = await createHarness();
+    const base = {
+      provider: ProviderDriverKind.make("codex"),
+      threadId: asThreadId("thread-1"),
+    };
+    await harness.emitAndDrain([
+      {
+        ...base,
+        type: "session.exited",
+        eventId: asEventId("session-exit-reset"),
+        createdAt: "2026-01-01T00:00:01.000Z",
+        payload: {},
+      },
+      {
+        ...base,
+        type: "session.state.changed",
+        eventId: asEventId("session-start-reset"),
+        createdAt: "2026-01-01T00:00:02.000Z",
+        payload: { state: "starting" },
+      },
+      {
+        ...base,
+        type: "session.state.changed",
+        eventId: asEventId("session-ready-no-reset"),
+        createdAt: "2026-01-01T00:00:03.000Z",
+        payload: { state: "ready" },
+      },
+    ]);
+    const thread = (await harness.readModel()).threads.find((entry) => entry.id === base.threadId);
+    expect(
+      thread?.activities
+        .filter((activity) => activity.kind === "session.reset")
+        .map((activity) => activity.id),
+    ).toEqual(["session-exit-reset", "session-start-reset"]);
+    expect(thread?.session?.status).toBe("ready");
+  });
+
   it("clears active turn when provider session becomes ready", async () => {
     const harness = await createHarness();
     const now = "2026-01-01T00:00:00.000Z";

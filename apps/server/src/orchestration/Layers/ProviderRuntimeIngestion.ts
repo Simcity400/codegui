@@ -481,6 +481,29 @@ export function runtimeEventToActivities(
       : {};
   })();
   switch (event.type) {
+    case "session.state.changed":
+    case "session.exited": {
+      if (
+        event.type === "session.state.changed" &&
+        event.payload.state !== "starting" &&
+        event.payload.state !== "error" &&
+        event.payload.state !== "stopped"
+      ) {
+        return [];
+      }
+      return [
+        {
+          id: event.eventId,
+          createdAt: event.createdAt,
+          tone: "info",
+          kind: "session.reset",
+          summary: "Provider session changed",
+          payload: { timelineBypass: true },
+          turnId: null,
+          ...maybeSequence,
+        },
+      ];
+    }
     case "request.opened": {
       if (event.payload.requestType === "tool_user_input") {
         return [];
