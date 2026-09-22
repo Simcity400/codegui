@@ -29,10 +29,12 @@ custom setting changes `CLAUDE_CONFIG_DIR`, leaving `HOME` and the system keycha
 location intact. Use the same variable for the login command. Setting `HOME`
 instead can put credentials where this provider will not find them.
 
-Check the account reported in provider settings after signing in. Existing
-threads can switch only between Claude instances with the same config directory.
-Separate account directories stay isolated, including their local conversation
-state. Claude does not have Codex's shared-home and shadow-home arrangement.
+Check the account reported in provider settings after signing in. On web, desktop,
+or mobile, choose another Claude account from the thread's model picker and send
+your next message in the same thread. T3 Code carries its conversation and subagent
+history to the selected account, including when the accounts use separate config
+directories. Each account keeps its own login and settings. Switching back carries
+the latest conversation with you.
 
 For presets that differ only in API keys or endpoints, use the instance's
 **Environment variables**. Variable assignments do not belong in **Launch arguments**.
@@ -58,7 +60,8 @@ for using composer commands.
 If your Claude subscription runs out of usage mid-turn, the thread shows which
 limit was reached and the remaining wait when Claude provides a reset time.
 Claude Code holds the turn until that window reopens, so it can keep showing as
-working. Wait for the reset, or stop the turn and continue later. The warning's
+working. Wait for the reset, or stop the turn, select another Claude account, and
+send your message again in the same thread. The warning's
 timestamp shows when the displayed wait started.
 
 ## Skills

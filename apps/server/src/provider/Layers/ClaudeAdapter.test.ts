@@ -59,6 +59,8 @@ class ClaudeAdapter extends Context.Service<ClaudeAdapter, ClaudeAdapterShape>()
 ) {}
 
 class FakeClaudeQuery implements AsyncIterable<SDKMessage> {
+  return = (): Promise<IteratorResult<SDKMessage, void>> =>
+    Promise.resolve({ done: true, value: undefined });
   private readonly queue: Array<SDKMessage> = [];
   private readonly waiters: Array<{
     readonly resolve: (value: IteratorResult<SDKMessage>) => void;
@@ -2997,7 +2999,11 @@ describe("ClaudeAdapterLive", () => {
         assert(completed?.type === "turn.completed");
         const actualQuery = harness.getLastCreateQueryInput();
         assert(actualQuery !== undefined);
-        const expectedConfigDir = homePath ? NodePath.resolve(homePath) : inherited;
+        const expectedConfigDir = homePath
+          ? NodePath.resolve(homePath)
+          : inherited
+            ? NodePath.resolve(inherited)
+            : undefined;
         assert.equal(actualQuery.options.env?.CLAUDE_CONFIG_DIR, expectedConfigDir);
         assert.equal(actualQuery.options.cwd, cwd);
         assert(
@@ -4299,6 +4305,27 @@ describe("ClaudeAdapterLive", () => {
       Effect.provideService(Random.Random, makeDeterministicRandomService()),
       Effect.provide(layer),
     );
+  });
+
+  it.effect("waits for SDK transcript cleanup before completing session stop", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      const cleanupStarted = Promise.withResolvers<void>();
+      const releaseCleanup = Promise.withResolvers<void>();
+      harness.query.return = async () => {
+        cleanupStarted.resolve();
+        await releaseCleanup.promise;
+        return { done: true, value: undefined };
+      };
+      yield* adapter.startSession({ threadId: THREAD_ID, runtimeMode: "full-access" });
+      const stop = yield* adapter.stopSession(THREAD_ID).pipe(Effect.forkChild);
+      yield* Effect.promise(() => cleanupStarted.promise);
+      assert.equal(stop.pollUnsafe(), undefined);
+      releaseCleanup.resolve();
+      yield* Fiber.join(stop);
+      assert.equal(yield* adapter.hasSession(THREAD_ID), false);
+    }).pipe(Effect.provide(harness.layer));
   });
 
   it.effect("stopSession does not throw into the SDK prompt consumer", () => {

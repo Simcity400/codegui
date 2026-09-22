@@ -1446,6 +1446,7 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
           );
         }
         const persistedBinding = Option.getOrUndefined(yield* directory.getBinding(threadId));
+        let transferSource: ProviderAdapterRegistry.ProviderInstanceRoutingInfo | undefined;
         let hasCompatiblePersistedBinding =
           persistedBinding?.provider === resolvedProvider &&
           persistedBinding.providerInstanceId === resolvedInstanceId;
@@ -1469,6 +1470,7 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
             );
           }
           hasCompatiblePersistedBinding = true;
+          transferSource = previousInfo;
         }
         const hasCompatiblePersistedCursor =
           hasCompatiblePersistedBinding &&
@@ -1513,7 +1515,7 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
             `Cannot fork thread '${input.forkFromThreadId}': it has no resumable provider context.`,
           );
         }
-        const effectiveResumeCursor =
+        let effectiveResumeCursor =
           input.resumeCursor ??
           (hasCompatiblePersistedCursor
             ? persistedBinding.resumeCursor
@@ -1557,6 +1559,36 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
           }
         }
         const adapter = yield* registry.getByInstance(resolvedInstanceId);
+        if (
+          transferSource !== undefined &&
+          adapter.transferSession !== undefined &&
+          effectiveResumeCursor !== undefined
+        ) {
+          const sourceAdapter = yield* registry.getByInstance(transferSource.instanceId);
+          const sourceSession = (yield* sourceAdapter.listSessions()).find(
+            (session) => session.threadId === threadId,
+          );
+          if (sourceSession !== undefined) {
+            effectiveResumeCursor =
+              input.resumeCursor ?? sourceSession.resumeCursor ?? effectiveResumeCursor;
+            yield* upsertSessionBinding(
+              { ...sourceSession, providerInstanceId: transferSource.instanceId },
+              threadId,
+            );
+            yield* sourceAdapter.stopSession(threadId);
+            yield* directory.upsert({
+              threadId,
+              provider: resolvedProvider,
+              providerInstanceId: transferSource.instanceId,
+              status: "stopped",
+              runtimePayload: { activeTurnId: null },
+            });
+          }
+          yield* adapter.transferSession({
+            source: transferSource.continuationIdentity,
+            resumeCursor: effectiveResumeCursor,
+          });
+        }
         yield* clearTurnAnalyticsSession(resolvedInstanceId, threadId);
         yield* prepareMcpSession(threadId, resolvedInstanceId);
         const { forkFromThreadId: _forkFromThreadId, ...adapterInput } = input;

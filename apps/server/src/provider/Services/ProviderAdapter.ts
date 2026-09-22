@@ -27,6 +27,7 @@ import type {
 } from "@t3tools/contracts";
 import type * as Effect from "effect/Effect";
 import type * as Stream from "effect/Stream";
+import type { ProviderContinuationIdentity } from "../ProviderDriver.ts";
 
 export type ProviderSessionModelSwitchMode = "in-session" | "unsupported";
 
@@ -80,6 +81,12 @@ export interface ProviderAdapterShape<TError> {
   readonly startSession: (
     input: ProviderSessionStartInput,
   ) => Effect.Effect<ProviderSession, TError>;
+
+  /** Called after stopping the source account, before resuming on this adapter. */
+  readonly transferSession?: (input: {
+    readonly source: ProviderContinuationIdentity;
+    readonly resumeCursor: unknown;
+  }) => Effect.Effect<void, TError>;
 
   /**
    * Send a turn to an active provider session.

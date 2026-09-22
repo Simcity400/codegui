@@ -8,7 +8,6 @@ import * as Path from "effect/Path";
 import {
   claudeSignedOutMessage,
   makeClaudeCapabilitiesCacheKey,
-  makeClaudeContinuationGroupKey,
   makeClaudeEnvironment,
   resolveClaudeHomePath,
 } from "./ClaudeHome.ts";
@@ -24,15 +23,10 @@ it.layer(NodeServices.layer)("ClaudeHome", (it) => {
         expect(yield* resolveClaudeHomePath({ homePath: "~/.claude" })).toBe(resolved);
         expect(yield* resolveClaudeHomePath({ homePath: resolved })).toBe(resolved);
         expect(yield* makeClaudeEnvironment({ homePath: "" })).toBe(process.env);
-
-        const key = `claude:home:${resolved}`;
-        expect(yield* makeClaudeContinuationGroupKey({ homePath: "" })).toBe(key);
-        expect(yield* makeClaudeContinuationGroupKey({ homePath: "~/.claude" })).toBe(key);
-        expect(yield* makeClaudeContinuationGroupKey({ homePath: resolved })).toBe(key);
       }),
     );
 
-    it.effect("resolves configured Claude HOME and stamps continuation/cache keys with it", () =>
+    it.effect("resolves configured Claude HOME and stamps cache keys with it", () =>
       Effect.gen(function* () {
         const path = yield* Path.Path;
         const homePath = "~/.claude-work";
@@ -40,7 +34,6 @@ it.layer(NodeServices.layer)("ClaudeHome", (it) => {
 
         expect(yield* resolveClaudeHomePath({ homePath })).toBe(resolved);
         expect((yield* makeClaudeEnvironment({ homePath })).CLAUDE_CONFIG_DIR).toBe(resolved);
-        expect(yield* makeClaudeContinuationGroupKey({ homePath })).toBe(`claude:home:${resolved}`);
         expect(yield* makeClaudeCapabilitiesCacheKey({ binaryPath: "claude", homePath })).toBe(
           `claude\0${resolved}\0`,
         );
@@ -54,14 +47,23 @@ it.layer(NodeServices.layer)("ClaudeHome", (it) => {
         const environment = { CLAUDE_CONFIG_DIR: inherited };
 
         expect(yield* resolveClaudeHomePath({ homePath: "" }, environment)).toBe(inherited);
-        expect(yield* makeClaudeContinuationGroupKey({ homePath: "" }, environment)).toBe(
-          `claude:home:${inherited}`,
-        );
 
         const explicit = path.resolve(NodeOS.homedir(), ".claude-work");
         expect(yield* resolveClaudeHomePath({ homePath: "~/.claude-work" }, environment)).toBe(
           explicit,
         );
+      }),
+    );
+
+    it.effect("passes an absolute inherited home to runtimes launched in another workspace", () =>
+      Effect.gen(function* () {
+        const path = yield* Path.Path;
+        const environment = { CLAUDE_CONFIG_DIR: "relative-account" };
+        const resolved = yield* resolveClaudeHomePath({ homePath: "" }, environment);
+        const runtime = yield* makeClaudeEnvironment({ homePath: "" }, environment);
+        expect(runtime.CLAUDE_CONFIG_DIR).toBe(resolved);
+        expect(path.isAbsolute(runtime.CLAUDE_CONFIG_DIR!)).toBe(true);
+        expect(environment.CLAUDE_CONFIG_DIR).toBe("relative-account");
       }),
     );
 
@@ -73,7 +75,7 @@ it.layer(NodeServices.layer)("ClaudeHome", (it) => {
       const message = claudeSignedOutMessage({ configDir, cwd: "/synthetic/project" });
       expect(message).toContain(`CLAUDE_CONFIG_DIR set to "${configDir}"`);
       expect(message).not.toContain("CLAUDE_CONFIG_DIR=");
-      expect(message).toContain("then start a new thread");
+      expect(message).toContain("then retry in this thread");
     });
 
     it.effect("separates capability probes by cwd", () =>

@@ -1025,9 +1025,12 @@ for (const driverKind of [CODEX_DRIVER, CLAUDE_AGENT_DRIVER]) {
   const work = makeFakeCodexAdapter(driverKind);
   const personal = makeFakeCodexAdapter(driverKind);
   const isolated = makeFakeCodexAdapter(driverKind);
+  const transferSession = vi.fn<
+    NonNullable<ProviderAdapterShape<ProviderAdapterError>["transferSession"]>
+  >(() => Effect.void);
   const baseRegistry = makeStaticInstanceRegistry([
     [workId, work.adapter],
-    [personalId, personal.adapter],
+    [personalId, { ...personal.adapter, transferSession }],
     [isolatedId, isolated.adapter],
   ]);
   const accountRouting = makeProviderServiceLayer({
@@ -1046,6 +1049,52 @@ for (const driverKind of [CODEX_DRIVER, CLAUDE_AGENT_DRIVER]) {
     },
   });
   accountRouting.layer(`${driverKind} account continuation`, (it) => {
+    it.effect(
+      "stops the old account before transfer and retains its binding if transfer fails",
+      () =>
+        Effect.gen(function* () {
+          const provider = yield* ProviderService.ProviderService;
+          const directory = yield* ProviderSessionDirectory.ProviderSessionDirectory;
+          const threadId = asThreadId(`${driverKind}-transfer-failure`);
+          yield* provider.startSession(threadId, {
+            threadId,
+            providerInstanceId: workId,
+            runtimeMode: "full-access",
+          });
+          const latestCursor = { opaque: "latest-native-context" };
+          work.updateSession(threadId, (session) => ({ ...session, resumeCursor: latestCursor }));
+          const startsBefore = personal.startSession.mock.calls.length;
+          transferSession.mockImplementationOnce((input) =>
+            Effect.gen(function* () {
+              assert.equal(yield* work.adapter.hasSession(threadId), false);
+              assert.deepEqual(input.resumeCursor, latestCursor);
+              return yield* new ProviderAdapterRequestError({
+                provider: driverKind,
+                method: "session/transfer",
+                detail: "Copy failed",
+              });
+            }),
+          );
+          yield* Effect.flip(
+            provider.startSession(threadId, {
+              threadId,
+              providerInstanceId: personalId,
+              runtimeMode: "full-access",
+            }),
+          );
+          assert.equal(personal.startSession.mock.calls.length, startsBefore);
+          const binding = Option.getOrThrow(yield* directory.getBinding(threadId));
+          assert.equal(binding.providerInstanceId, workId);
+          assert.deepEqual(binding.resumeCursor, latestCursor);
+          const resumed = yield* provider.startSession(threadId, {
+            threadId,
+            providerInstanceId: personalId,
+            runtimeMode: "full-access",
+          });
+          assert.equal(resumed.providerInstanceId, personalId);
+          assert.deepEqual(resumed.resumeCursor, latestCursor);
+        }),
+    );
     it.effect("keeps stopped thread context and workspace when switching accounts and back", () =>
       Effect.gen(function* () {
         const provider = yield* ProviderService.ProviderService;
