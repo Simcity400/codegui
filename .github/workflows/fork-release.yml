@@ -76,22 +76,7 @@ jobs:
         name: Tag the checked source before main can advance during packaging
         env:
           RELEASE_TAG: ${{ steps.release_meta.outputs.tag }}
-        run: |
-          set -euo pipefail
-          source="$(git rev-parse HEAD)"
-          tagged="$(git ls-remote origin "refs/tags/$RELEASE_TAG" | cut -f1)"
-          if [[ -n "$tagged" ]]; then
-            [[ "$tagged" == "$source" ]] || { echo 'Release tag names different source' >&2; exit 1; }
-          elif [[ "$(git ls-remote origin refs/heads/main | cut -f1)" != "$source" ]]; then
-            echo 'A newer main is queued for release; skipping this superseded build.'
-            echo 'ready=false' >> "$GITHUB_OUTPUT"
-            exit 0
-          else
-            # GITHUB_TOKEN cannot always create a new tag for an older commit
-            # that changed workflows. Reserve it while this source is main.
-            git push origin "HEAD:refs/tags/$RELEASE_TAG"
-          fi
-          echo 'ready=true' >> "$GITHUB_OUTPUT"
+        run: node scripts/pin-release-tag.ts
 
   build:
     name: Build Windows ${{ matrix.arch }}

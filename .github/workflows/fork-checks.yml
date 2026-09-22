@@ -69,6 +69,7 @@ jobs:
         run: |
           vp test run \
             scripts/fork-sync.test.ts \
+            scripts/pin-release-tag.test.ts \
             scripts/mobile-build-budget.test.ts \
             scripts/merge-update-manifests.test.ts \
             apps/desktop/src/updates/DesktopUpdates.test.ts \
