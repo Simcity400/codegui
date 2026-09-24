@@ -45,7 +45,7 @@ three-day wait, but still respects the cap and avoids overlapping EAS builds.
 
 ## Upstream sync
 
-**Fork Sync** checks for published official nightlies every hour (GitHub may
+**Fork Sync** checks for published official nightlies every 15 minutes (GitHub may
 delay scheduled runs). It merges the published tag into `main`, records it in
 `fork-upstream.json`, and explicitly starts Windows and iPhone releases. Direct
 pushes also trigger the relevant releases. Package versions stay upstream-owned;
