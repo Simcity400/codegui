@@ -824,6 +824,7 @@ export function AgentsPanel({
   environmentId = null,
   threadId = null,
   renderTranscript,
+  loadEarlier = null,
 }: {
   model: AgentPanelModel;
   environmentId?: EnvironmentId | null;
@@ -833,6 +834,12 @@ export function AgentsPanel({
     agent: RuntimeSubagent,
     controls: { readonly openRoster: () => void },
   ) => ReactNode;
+  /**
+   * Live work is pinned to every history page by the server; settled agents
+   * and tasks from older turns arrive with their page, so the roster offers
+   * the same "load earlier" the transcript has.
+   */
+  loadEarlier?: { readonly loading: boolean; readonly onLoadEarlier: () => void } | null;
 }) {
   const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null);
   const openTranscript = useCallback((agent: RuntimeSubagent) => setSelectedAgentId(agent.id), []);
@@ -974,6 +981,16 @@ export function AgentsPanel({
           When this thread spawns subagents, runs a workflow, or backgrounds a task, they show up
           here with live status, activity, and token usage.
         </p>
+        {loadEarlier ? (
+          <Button
+            size="xs"
+            variant="ghost-muted"
+            disabled={loadEarlier.loading}
+            onClick={loadEarlier.onLoadEarlier}
+          >
+            {loadEarlier.loading ? "Loading earlier…" : "Load earlier history"}
+          </Button>
+        ) : null}
       </div>
     );
   }
@@ -1033,6 +1050,17 @@ export function AgentsPanel({
               open={settledTasksOpen}
               onToggle={() => setSettledTasksOpen((value) => !value)}
             />
+            {loadEarlier ? (
+              <Button
+                size="xs"
+                variant="ghost-muted"
+                className="self-center"
+                disabled={loadEarlier.loading}
+                onClick={loadEarlier.onLoadEarlier}
+              >
+                {loadEarlier.loading ? "Loading earlier…" : "Load earlier history"}
+              </Button>
+            ) : null}
           </div>
         </ScrollArea>
         <footer className="flex items-center justify-between border-t border-border/60 px-3 py-1.5 font-mono text-[.7rem] text-muted-foreground">

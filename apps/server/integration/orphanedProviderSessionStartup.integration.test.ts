@@ -124,8 +124,6 @@ const startupDependencies = Layer.mergeAll(
     assertConversationRollbackSupported: () => Effect.die("unused"),
     getInstanceInfo: () => Effect.die("unused"),
     rollbackConversation: () => Effect.die("unused"),
-    setCodexGoal: () => Effect.die("Goal mutation is not stubbed in this test"),
-    clearCodexGoal: () => Effect.die("Goal mutation is not stubbed in this test"),
     uploadFeedback: () => Effect.die("unused"),
     streamEvents: Stream.empty,
   }),

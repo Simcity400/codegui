@@ -32,6 +32,7 @@ import * as Persistence from "../platform/persistence.ts";
 import * as RpcSession from "../rpc/session.ts";
 import type { ThreadSnapshotWindow } from "./threadSnapshotHttp.ts";
 import {
+  INITIAL_THREAD_USER_TURN_LIMIT,
   makeEnvironmentThreadState,
   requestOlderThreadTurns,
   ThreadSnapshotLoader,
@@ -317,17 +318,19 @@ describe("thread pagination state", () => {
     );
   }
 
-  it.effect("loads full history on open even when the server advertises pagination", () =>
+  it.effect("windows the initial load when the server advertises pagination", () =>
     Effect.gen(function* () {
-      const harness = yield* makeHarness({
-        initialResponse: Option.some({ snapshotSequence: 10, thread: BASE_THREAD }),
+      const harness = yield* makeHarness({ initialResponse: Option.some(WINDOWED_SNAPSHOT) });
+      const state = yield* harness.awaitState((value) => Option.isSome(value.page));
+      expect(Option.getOrThrow(state.page)).toEqual({
+        beforeCursor: "cursor-1",
+        hasMore: true,
+        loadingOlder: false,
       });
-      const state = yield* harness.awaitState((value) => Option.isSome(value.data));
-      expect(Option.isNone(state.page)).toBe(true);
       const windows = yield* Ref.get(harness.loaderWindows);
-      expect(windows).toEqual([undefined]);
+      expect(windows[0]?.turnLimit).toBe(INITIAL_THREAD_USER_TURN_LIMIT);
       const subscribeInput = yield* Ref.get(harness.lastSubscribeInput);
-      expect(subscribeInput?.turnLimit).toBeUndefined();
+      expect(subscribeInput?.turnLimit).toBe(INITIAL_THREAD_USER_TURN_LIMIT);
     }),
   );
 
@@ -645,35 +648,17 @@ describe("thread pagination state", () => {
     }),
   );
 
-  it.effect("replaces a partial cache with full history on a pagination-capable server", () =>
+  it.effect("keeps a windowed cache when the server supports pagination", () =>
     Effect.gen(function* () {
-      const harness = yield* makeHarness({
-        cached: WINDOWED_SNAPSHOT,
-        initialResponse: Option.some({
-          snapshotSequence: 20,
-          thread: { ...BASE_THREAD, title: "Full history" },
-        }),
-      });
-      const state = yield* harness.awaitState((value) =>
-        Option.exists(value.data, (thread) => thread.title === "Full history"),
-      );
-      expect(Option.isNone(state.page)).toBe(true);
-      expect(yield* Ref.get(harness.loaderWindows)).toEqual([undefined]);
-      const subscribeInput = yield* Ref.get(harness.lastSubscribeInput);
-      expect(subscribeInput?.afterSequence).toBe(20);
-      expect(subscribeInput?.turnLimit).toBeUndefined();
-    }),
-  );
-
-  it.effect("reuses complete cached history without downloading it again", () =>
-    Effect.gen(function* () {
-      const harness = yield* makeHarness({ cached: { snapshotSequence: 10, thread: BASE_THREAD } });
+      const harness = yield* makeHarness({ cached: WINDOWED_SNAPSHOT });
+      const state = yield* harness.awaitState((value) => Option.isSome(value.page));
+      expect(Option.getOrThrow(state.page).beforeCursor).toBe("cursor-1");
+      // Wait for the subscription (recorded when the WS method is invoked)
+      // before asserting its input.
       const subscribeInput = yield* Ref.get(harness.lastSubscribeInput).pipe(
         Effect.repeat({ until: (input) => input !== undefined }),
       );
       expect(subscribeInput?.afterSequence).toBe(10);
-      expect(subscribeInput?.turnLimit).toBeUndefined();
-      expect(yield* Ref.get(harness.loaderWindows)).toEqual([]);
     }),
   );
 });

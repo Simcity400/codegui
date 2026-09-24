@@ -23,7 +23,6 @@ import {
   TrimmedString,
   TurnId,
 } from "./baseSchemas.ts";
-import { CodexGoal } from "./codexGoal.ts";
 import { ProviderInstanceId } from "./providerInstance.ts";
 import {
   PullRequestActor,
@@ -700,13 +699,6 @@ export const ThreadTitleState = Schema.Struct({
 });
 export type ThreadTitleState = typeof ThreadTitleState.Type;
 
-export const OrchestrationThreadGoal = Schema.Struct({
-  ...CodexGoal.fields,
-  // The provider turn whose final message explains a blocked goal.
-  turnId: Schema.NullOr(TurnId),
-});
-export type OrchestrationThreadGoal = typeof OrchestrationThreadGoal.Type;
-
 export const ThreadTitleRegeneration = Schema.Struct({
   requestId: CommandId,
   startedAt: IsoDateTime,
@@ -817,8 +809,6 @@ export const OrchestrationThread = Schema.Struct({
     Schema.withDecodingDefault(Effect.succeed([])),
   ),
   branchPullRequest: Schema.optional(Schema.NullOr(ThreadLinkedPullRequest)),
-  forkedFromThreadId: Schema.optional(Schema.NullOr(ThreadId)),
-  sideChatPromotedAt: Schema.optional(Schema.NullOr(IsoDateTime)),
   latestTurn: Schema.NullOr(OrchestrationLatestTurn),
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
@@ -861,10 +851,6 @@ export const OrchestrationThread = Schema.Struct({
   activities: Schema.Array(OrchestrationThreadActivity),
   checkpoints: Schema.Array(OrchestrationCheckpointSummary),
   session: Schema.NullOr(OrchestrationSession),
-  // The provider's native long-running goal for this thread, projected from
-  // its notifications so it stays visible after the provider session stops.
-  // Optional so payloads from pre-goal servers still decode.
-  goal: Schema.optional(Schema.NullOr(OrchestrationThreadGoal)),
 });
 export type OrchestrationThread = typeof OrchestrationThread.Type;
 
@@ -909,8 +895,6 @@ export const OrchestrationThreadShell = Schema.Struct({
     Schema.withDecodingDefault(Effect.succeed([])),
   ),
   branchPullRequest: Schema.optional(Schema.NullOr(ThreadLinkedPullRequest)),
-  forkedFromThreadId: Schema.optional(Schema.NullOr(ThreadId)),
-  sideChatPromotedAt: Schema.optional(Schema.NullOr(IsoDateTime)),
   latestTurn: Schema.NullOr(OrchestrationLatestTurn),
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
@@ -1142,7 +1126,6 @@ const ThreadCreateCommand = Schema.Struct({
   ),
   branch: Schema.NullOr(TrimmedNonEmptyString),
   worktreePath: Schema.NullOr(TrimmedNonEmptyString),
-  forkedFromThreadId: Schema.optional(Schema.NullOr(ThreadId)),
   createdAt: IsoDateTime,
   historyImport: Schema.optional(Schema.Literal(true)),
 });
@@ -1255,7 +1238,6 @@ const ThreadMetaUpdateCommand = Schema.Struct({
   expectedBranch: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
   worktreePath: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
   linkedPullRequest: Schema.optional(Schema.NullOr(ThreadLinkedPullRequest)),
-  sideChatPromotedAt: Schema.optional(Schema.NullOr(IsoDateTime)),
 }).check(
   Schema.makeFilter(
     (input) =>
@@ -1304,7 +1286,6 @@ const ThreadTurnStartBootstrapCreateThread = Schema.Struct({
   interactionMode: ProviderInteractionMode,
   branch: Schema.NullOr(TrimmedNonEmptyString),
   worktreePath: Schema.NullOr(TrimmedNonEmptyString),
-  forkedFromThreadId: Schema.optional(Schema.NullOr(ThreadId)),
   createdAt: IsoDateTime,
 });
 
@@ -1607,14 +1588,6 @@ const ThreadActivityAppendCommand = Schema.Struct({
   createdAt: IsoDateTime,
 });
 
-const ThreadGoalSetCommand = Schema.Struct({
-  type: Schema.Literal("thread.goal.set"),
-  commandId: CommandId,
-  threadId: ThreadId,
-  goal: Schema.NullOr(OrchestrationThreadGoal),
-  createdAt: IsoDateTime,
-});
-
 const ThreadRevertCompleteCommand = Schema.Struct({
   type: Schema.Literal("thread.revert.complete"),
   commandId: CommandId,
@@ -1687,7 +1660,6 @@ const InternalOrchestrationCommand = Schema.Union([
   ThreadMessageUserAppendCommand,
   ThreadProposedPlanUpsertCommand,
   ThreadTurnDiffCompleteCommand,
-  ThreadGoalSetCommand,
   ThreadActivityAppendCommand,
   ThreadRevertCompleteCommand,
   ThreadTitleRegenerationCompleteCommand,
@@ -1789,8 +1761,6 @@ export const ThreadCreatedPayload = Schema.Struct({
   ),
   branch: Schema.NullOr(TrimmedNonEmptyString),
   worktreePath: Schema.NullOr(TrimmedNonEmptyString),
-  forkedFromThreadId: Schema.optional(Schema.NullOr(ThreadId)),
-  sideChatPromotedAt: Schema.optional(Schema.NullOr(IsoDateTime)),
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
 });
@@ -1881,7 +1851,6 @@ export const ThreadMetaUpdatedPayload = Schema.Struct({
   // thread.pull-request-linked still decode and replay into the link table.
   linkedPullRequest: Schema.optional(Schema.NullOr(ThreadLinkedPullRequest)),
   branchPullRequest: Schema.optional(Schema.NullOr(ThreadLinkedPullRequest)),
-  sideChatPromotedAt: Schema.optional(Schema.NullOr(IsoDateTime)),
   updatedAt: IsoDateTime,
 });
 
@@ -2012,11 +1981,6 @@ export const ThreadTurnDiffCompletedPayload = Schema.Struct({
 export const ThreadActivityAppendedPayload = Schema.Struct({
   threadId: ThreadId,
   activity: OrchestrationThreadActivity,
-});
-
-export const ThreadGoalSetPayload = Schema.Struct({
-  threadId: ThreadId,
-  goal: Schema.NullOr(OrchestrationThreadGoal),
 });
 
 /**
@@ -2221,10 +2185,12 @@ export const OrchestrationEvent = Schema.Union([
     type: Schema.Literal("thread.activity-appended"),
     payload: ThreadActivityAppendedPayload,
   }),
+  // Forked databases still store events from the removed Codex goals feature.
+  // They stay decodable so event replay never fails; nothing projects them.
   Schema.Struct({
     ...EventBaseFields,
     type: Schema.Literal("thread.goal-set"),
-    payload: ThreadGoalSetPayload,
+    payload: Schema.Struct({ threadId: ThreadId }),
   }),
 ]);
 export type OrchestrationEvent = typeof OrchestrationEvent.Type;

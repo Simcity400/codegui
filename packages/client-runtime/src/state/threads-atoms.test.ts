@@ -863,7 +863,7 @@ describe("createEnvironmentThreadStateAtoms", () => {
     }),
   );
 
-  it.effect("cancels older-page work on unmount and reloads the partial cache on return", () =>
+  it.effect("cancels older-page work on unmount and permits it again on a warm return", () =>
     Effect.gen(function* () {
       const h = yield* makeHarness({
         snapshot: {
@@ -885,7 +885,7 @@ describe("createEnvironmentThreadStateAtoms", () => {
       expect(requestOlderThreadTurns(TARGET.environmentId, THREAD_ID)).toBe(true);
       const retried = yield* Queue.take(h.olderLoads);
       expect(retried.window.beforeCursor).toBe("older-1");
-      expect(h.counts().httpLoads).toBe(2);
+      expect(h.counts().httpLoads).toBe(1);
       remount();
       yield* Deferred.await(next.closed);
       yield* Deferred.await(retried.closed);

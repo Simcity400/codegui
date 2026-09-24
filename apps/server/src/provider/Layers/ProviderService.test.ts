@@ -4,8 +4,6 @@ import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 
 import type {
-  CodexGoal,
-  CodexGoalSetInput,
   ProviderApprovalDecision,
   ProviderRuntimeEvent,
   ProviderSendTurnInput,
@@ -143,31 +141,29 @@ function makeFakeCodexAdapter(
   supportsConversationRollback?: boolean,
 ) {
   const sessions = new Map<ThreadId, ProviderSession>();
-  const goals = new Map<ThreadId, CodexGoal>();
   const runtimeEventPubSub = Effect.runSync(PubSub.unbounded<ProviderRuntimeEvent>());
 
-  const startSession = vi.fn(
-    (input: ProviderSessionStartInput): Effect.Effect<ProviderSession, ProviderAdapterError> =>
-      Effect.sync(() => {
-        const now = "2026-01-01T00:00:00.000Z";
-        const session: ProviderSession = {
-          provider,
-          ...(input.providerInstanceId !== undefined
-            ? { providerInstanceId: input.providerInstanceId }
-            : {}),
-          status: "ready",
-          runtimeMode: input.runtimeMode,
-          threadId: input.threadId,
-          resumeCursor: input.resumeCursor ?? {
-            opaque: `resume-${String(input.threadId)}`,
-          },
-          cwd: input.cwd ?? process.cwd(),
-          createdAt: now,
-          updatedAt: now,
-        };
-        sessions.set(session.threadId, session);
-        return session;
-      }),
+  const startSession = vi.fn((input: ProviderSessionStartInput) =>
+    Effect.sync(() => {
+      const now = "2026-01-01T00:00:00.000Z";
+      const session: ProviderSession = {
+        provider,
+        ...(input.providerInstanceId !== undefined
+          ? { providerInstanceId: input.providerInstanceId }
+          : {}),
+        status: "ready",
+        runtimeMode: input.runtimeMode,
+        threadId: input.threadId,
+        resumeCursor: input.resumeCursor ?? {
+          opaque: `resume-${String(input.threadId)}`,
+        },
+        cwd: input.cwd ?? process.cwd(),
+        createdAt: now,
+        updatedAt: now,
+      };
+      sessions.set(session.threadId, session);
+      return session;
+    }),
   );
 
   const sendTurn = vi.fn(
@@ -274,28 +270,6 @@ function makeFakeCodexAdapter(
     }),
   );
 
-  const setCodexGoal = vi.fn((input: CodexGoalSetInput) =>
-    Effect.sync(() => {
-      const { threadId, ...updates } = input;
-      const next: CodexGoal = {
-        objective: "Test Goal",
-        status: "active",
-        tokenBudget: null,
-        tokensUsed: 0,
-        timeUsedSeconds: 0,
-        createdAt: 1_777_000_000,
-        updatedAt: 1_777_000_001,
-        ...goals.get(threadId),
-        ...updates,
-      };
-      goals.set(threadId, next);
-      return next;
-    }),
-  );
-  const clearCodexGoal = vi.fn((threadId: ThreadId) =>
-    Effect.sync(() => ({ cleared: goals.delete(threadId) })),
-  );
-
   const adapter: ProviderAdapterShape<ProviderAdapterError> = {
     provider,
     capabilities: {
@@ -320,9 +294,7 @@ function makeFakeCodexAdapter(
     hasSession,
     readThread,
     rollbackThread,
-    ...(provider === CODEX_DRIVER
-      ? { uploadFeedback, codexGoal: { set: setCodexGoal, clear: clearCodexGoal } }
-      : {}),
+    ...(provider === CODEX_DRIVER ? { uploadFeedback } : {}),
     stopAll,
     get streamEvents() {
       return Stream.fromPubSub(runtimeEventPubSub);
@@ -360,8 +332,6 @@ function makeFakeCodexAdapter(
     readThread,
     rollbackThread,
     uploadFeedback,
-    setCodexGoal,
-    clearCodexGoal,
     stopAll,
   };
 }
@@ -1018,252 +988,6 @@ it.effect("ProviderServiceLive rejects new sessions for disabled custom instance
 
 const routing = makeProviderServiceLayer();
 
-for (const driverKind of [CODEX_DRIVER, CLAUDE_AGENT_DRIVER]) {
-  const workId = ProviderInstanceId.make(`${driverKind}-work`);
-  const personalId = ProviderInstanceId.make(`${driverKind}-personal`);
-  const isolatedId = ProviderInstanceId.make(`${driverKind}-isolated`);
-  const work = makeFakeCodexAdapter(driverKind);
-  const personal = makeFakeCodexAdapter(driverKind);
-  const isolated = makeFakeCodexAdapter(driverKind);
-  const transferSession = vi.fn<
-    NonNullable<ProviderAdapterShape<ProviderAdapterError>["transferSession"]>
-  >(() => Effect.void);
-  const baseRegistry = makeStaticInstanceRegistry([
-    [workId, work.adapter],
-    [personalId, { ...personal.adapter, transferSession }],
-    [isolatedId, isolated.adapter],
-  ]);
-  const accountRouting = makeProviderServiceLayer({
-    registry: {
-      ...baseRegistry,
-      getInstanceInfo: (instanceId) =>
-        baseRegistry.getInstanceInfo(instanceId).pipe(
-          Effect.map((info) => ({
-            ...info,
-            continuationIdentity: {
-              driverKind,
-              continuationKey: instanceId === isolatedId ? "isolated" : "shared",
-            },
-          })),
-        ),
-    },
-  });
-  accountRouting.layer(`${driverKind} account continuation`, (it) => {
-    it.effect("releases the active writer before resuming another account and switching back", () =>
-      Effect.gen(function* () {
-        const provider = yield* ProviderService.ProviderService;
-        const threadId = asThreadId(`${driverKind}-active-account-switch`);
-        const cwd = fixtureCwd(`${driverKind}-active-account-switch`);
-        yield* provider.startSession(threadId, {
-          threadId,
-          providerInstanceId: personalId,
-          runtimeMode: "full-access",
-          cwd,
-        });
-
-        for (const [instanceId, source, target] of [
-          [workId, personal, work],
-          [personalId, work, personal],
-        ] as const) {
-          const resumeCursor = { opaque: `latest-context-before-${instanceId}` };
-          source.updateSession(threadId, (session) => ({ ...session, resumeCursor }));
-          const start = target.startSession.getMockImplementation()!;
-          target.startSession.mockImplementationOnce((input) =>
-            Effect.gen(function* () {
-              if (yield* source.adapter.hasSession(threadId)) {
-                return yield* new ProviderAdapterRequestError({
-                  provider: driverKind,
-                  method: "thread/resume",
-                  detail: `thread ${threadId} already has an active writer`,
-                });
-              }
-              return yield* start(input);
-            }),
-          );
-          const session = yield* provider.startSession(threadId, {
-            threadId,
-            providerInstanceId: instanceId,
-            runtimeMode: "full-access",
-          });
-          assert.equal(session.providerInstanceId, instanceId);
-          assert.deepEqual(session.resumeCursor, resumeCursor);
-          assert.equal(session.cwd, cwd);
-          yield* provider.sendTurn({ threadId, input: "continue the conversation" });
-        }
-      }),
-    );
-
-    it.effect("can retry an account resume failure without a transfer hook or server restart", () =>
-      Effect.gen(function* () {
-        const provider = yield* ProviderService.ProviderService;
-        const directory = yield* ProviderSessionDirectory.ProviderSessionDirectory;
-        const threadId = asThreadId(`${driverKind}-resume-failure`);
-        yield* provider.startSession(threadId, {
-          threadId,
-          providerInstanceId: personalId,
-          runtimeMode: "full-access",
-        });
-        const resumeCursor = { opaque: "latest-context-before-failure" };
-        personal.updateSession(threadId, (session) => ({ ...session, resumeCursor }));
-        work.startSession.mockImplementationOnce(() =>
-          Effect.fail(
-            new ProviderAdapterRequestError({
-              provider: driverKind,
-              method: "thread/resume",
-              detail: "Resume failed",
-            }),
-          ),
-        );
-        const input = { threadId, providerInstanceId: workId, runtimeMode: "full-access" } as const;
-        yield* Effect.flip(provider.startSession(threadId, input));
-        assert.equal(yield* personal.adapter.hasSession(threadId), false);
-        const binding = Option.getOrThrow(yield* directory.getBinding(threadId));
-        assert.equal(binding.providerInstanceId, personalId);
-        assert.equal(binding.status, "stopped");
-        assert.deepEqual(binding.resumeCursor, resumeCursor);
-
-        const session = yield* provider.startSession(threadId, input);
-        assert.equal(session.providerInstanceId, workId);
-        assert.deepEqual(session.resumeCursor, resumeCursor);
-        yield* provider.sendTurn({ threadId, input: "continue after retry" });
-      }),
-    );
-
-    it.effect("does not resume the new account when stopping the old writer fails", () =>
-      Effect.gen(function* () {
-        const provider = yield* ProviderService.ProviderService;
-        const directory = yield* ProviderSessionDirectory.ProviderSessionDirectory;
-        const threadId = asThreadId(`${driverKind}-stop-failure`);
-        yield* provider.startSession(threadId, {
-          threadId,
-          providerInstanceId: personalId,
-          runtimeMode: "full-access",
-        });
-        personal.stopSession.mockImplementationOnce(() =>
-          Effect.fail(
-            new ProviderAdapterRequestError({
-              provider: driverKind,
-              method: "session/stop",
-              detail: "Stop failed",
-            }),
-          ),
-        );
-        const startsBefore = work.startSession.mock.calls.length;
-        const input = { threadId, providerInstanceId: workId, runtimeMode: "full-access" } as const;
-        const failure = yield* Effect.flip(provider.startSession(threadId, input));
-        assert.instanceOf(failure, ProviderAdapterRequestError);
-        assert.equal(work.startSession.mock.calls.length, startsBefore);
-        assert.equal(yield* personal.adapter.hasSession(threadId), true);
-        const binding = Option.getOrThrow(yield* directory.getBinding(threadId));
-        assert.equal(binding.providerInstanceId, personalId);
-
-        yield* provider.startSession(threadId, input);
-        yield* provider.sendTurn({ threadId, input: "continue after retrying stop" });
-      }),
-    );
-
-    it.effect(
-      "stops the old account before transfer and retains its binding if transfer fails",
-      () =>
-        Effect.gen(function* () {
-          const provider = yield* ProviderService.ProviderService;
-          const directory = yield* ProviderSessionDirectory.ProviderSessionDirectory;
-          const threadId = asThreadId(`${driverKind}-transfer-failure`);
-          yield* provider.startSession(threadId, {
-            threadId,
-            providerInstanceId: workId,
-            runtimeMode: "full-access",
-          });
-          const latestCursor = { opaque: "latest-native-context" };
-          work.updateSession(threadId, (session) => ({ ...session, resumeCursor: latestCursor }));
-          const startsBefore = personal.startSession.mock.calls.length;
-          transferSession.mockImplementationOnce((input) =>
-            Effect.gen(function* () {
-              assert.equal(yield* work.adapter.hasSession(threadId), false);
-              assert.deepEqual(input.resumeCursor, latestCursor);
-              return yield* new ProviderAdapterRequestError({
-                provider: driverKind,
-                method: "session/transfer",
-                detail: "Copy failed",
-              });
-            }),
-          );
-          yield* Effect.flip(
-            provider.startSession(threadId, {
-              threadId,
-              providerInstanceId: personalId,
-              runtimeMode: "full-access",
-            }),
-          );
-          assert.equal(personal.startSession.mock.calls.length, startsBefore);
-          const binding = Option.getOrThrow(yield* directory.getBinding(threadId));
-          assert.equal(binding.providerInstanceId, workId);
-          assert.deepEqual(binding.resumeCursor, latestCursor);
-          const resumed = yield* provider.startSession(threadId, {
-            threadId,
-            providerInstanceId: personalId,
-            runtimeMode: "full-access",
-          });
-          assert.equal(resumed.providerInstanceId, personalId);
-          assert.deepEqual(resumed.resumeCursor, latestCursor);
-        }),
-    );
-    it.effect("keeps stopped thread context and workspace when switching accounts and back", () =>
-      Effect.gen(function* () {
-        const provider = yield* ProviderService.ProviderService;
-        const threadId = asThreadId(`${driverKind}-account-switch`);
-        const cwd = fixtureCwd(`${driverKind}-account-switch`);
-        const resumeCursor = { opaque: "existing-conversation-with-agents" };
-        yield* provider.startSession(threadId, {
-          threadId,
-          providerInstanceId: workId,
-          runtimeMode: "full-access",
-          cwd,
-          resumeCursor,
-        });
-        work.sendTurn.mockImplementationOnce(() =>
-          Effect.fail(
-            new ProviderAdapterRequestError({
-              provider: driverKind,
-              method: "turn/start",
-              detail: "Usage limit reached",
-            }),
-          ),
-        );
-        const exhausted = yield* Effect.flip(provider.sendTurn({ threadId, input: "continue" }));
-        assert.instanceOf(exhausted, ProviderAdapterRequestError);
-        yield* provider.stopSession({ threadId });
-        for (const [instanceId, adapter] of [
-          [personalId, personal],
-          [workId, work],
-        ] as const) {
-          const session = yield* provider.startSession(threadId, {
-            threadId,
-            providerInstanceId: instanceId,
-            runtimeMode: "full-access",
-          });
-          assert.equal(session.threadId, threadId);
-          assert.equal(session.providerInstanceId, instanceId);
-          assert.deepEqual(adapter.startSession.mock.calls.at(-1)?.[0].resumeCursor, resumeCursor);
-          assert.equal(adapter.startSession.mock.calls.at(-1)?.[0].cwd, cwd);
-          yield* provider.sendTurn({ threadId, input: "continue after switching accounts" });
-          assert.equal(adapter.sendTurn.mock.calls.at(-1)?.[0].threadId, threadId);
-          yield* provider.stopSession({ threadId });
-        }
-        const failure = yield* Effect.flip(
-          provider.startSession(threadId, {
-            threadId,
-            providerInstanceId: isolatedId,
-            runtimeMode: "full-access",
-          }),
-        );
-        assert.instanceOf(failure, ProviderValidationError);
-        assert.equal(isolated.startSession.mock.calls.length, 0);
-      }),
-    );
-  });
-}
-
 const customCompactionDriver = ProviderDriverKind.make("custom-compaction-provider");
 const nativeCompactionInstanceId = ProviderInstanceId.make("native-compaction");
 const slashCompactionInstanceId = ProviderInstanceId.make("slash-compaction");
@@ -1821,256 +1545,7 @@ it.effect(
     }).pipe(Effect.provide(NodeServices.layer)),
 );
 
-const sideForkRouting = makeProviderServiceLayer();
-sideForkRouting.layer("ProviderService side chats", (it) => {
-  it.effect("forks the parent once and resumes the child's own continuation on reopening", () =>
-    Effect.gen(function* () {
-      const provider = yield* ProviderService.ProviderService;
-      const parentId = asThreadId("side-parent");
-      const childId = asThreadId("side-child");
-      const parent = yield* provider.startSession(parentId, {
-        providerInstanceId: codexInstanceId,
-        threadId: parentId,
-        runtimeMode: "full-access",
-      });
-      const original = sideForkRouting.codex.startSession.getMockImplementation()!;
-      sideForkRouting.codex.startSession.mockImplementationOnce((input) =>
-        original({ ...input, resumeCursor: { opaque: "child-continuation" } }),
-      );
-      yield* provider.startSession(childId, {
-        providerInstanceId: codexInstanceId,
-        threadId: childId,
-        runtimeMode: "full-access",
-        forkFromThreadId: parentId,
-      });
-      const first = sideForkRouting.codex.startSession.mock.calls.at(-1)?.[0];
-      assert.equal(first?.forkFromThreadId, parentId);
-      assert.deepEqual(first?.resumeCursor, parent.resumeCursor);
-      yield* provider.stopSession({ threadId: childId });
-      yield* provider.startSession(childId, {
-        providerInstanceId: codexInstanceId,
-        threadId: childId,
-        runtimeMode: "full-access",
-        forkFromThreadId: parentId,
-      });
-      const reopened = sideForkRouting.codex.startSession.mock.calls.at(-1)?.[0];
-      assert.equal(reopened?.forkFromThreadId, undefined);
-      assert.deepEqual(reopened?.resumeCursor, { opaque: "child-continuation" });
-    }),
-  );
-  it.effect("rejects missing parents and forks across provider instances", () =>
-    Effect.gen(function* () {
-      const provider = yield* ProviderService.ProviderService;
-      const parentId = asThreadId("side-claude-parent");
-      yield* provider.startSession(parentId, {
-        provider: CLAUDE_AGENT_DRIVER,
-        providerInstanceId: claudeAgentInstanceId,
-        threadId: parentId,
-        runtimeMode: "full-access",
-      });
-      for (const parent of [parentId, asThreadId("side-missing-parent")]) {
-        const result = yield* provider
-          .startSession(asThreadId("side-invalid-child"), {
-            providerInstanceId: codexInstanceId,
-            threadId: asThreadId("side-invalid-child"),
-            runtimeMode: "full-access",
-            forkFromThreadId: parent,
-          })
-          .pipe(Effect.result);
-        assert.equal(result._tag, "Failure");
-        if (result._tag === "Failure") assert.instanceOf(result.failure, ProviderValidationError);
-      }
-    }),
-  );
-});
-
 routing.layer("ProviderServiceLive routing", (it) => {
-  it.effect("rejects native Codex Goal operations for unsupported providers", () =>
-    Effect.gen(function* () {
-      const provider = yield* ProviderService.ProviderService;
-      const threadId = asThreadId("claude-goal-thread");
-      yield* provider.startSession(threadId, {
-        provider: CLAUDE_AGENT_DRIVER,
-        providerInstanceId: claudeAgentInstanceId,
-        threadId,
-        cwd: fixtureCwd("claude-goal-thread"),
-        runtimeMode: "full-access",
-      });
-      yield* provider.stopSession({ threadId });
-      routing.claude.startSession.mockClear();
-      routing.claude.stopSession.mockClear();
-
-      const results = yield* Effect.all([
-        provider
-          .setCodexGoal({ threadId, objective: "Unsupported Goal", status: "active" })
-          .pipe(Effect.result),
-        provider.clearCodexGoal(threadId).pipe(Effect.result),
-      ]);
-      for (const result of results) {
-        assert.equal(result._tag, "Failure");
-        if (result._tag === "Failure") {
-          assert.equal(result.failure._tag, "ProviderValidationError");
-        }
-      }
-      assert.equal(routing.claude.startSession.mock.calls.length, 0);
-      routing.claude.startSession.mockClear();
-      routing.claude.stopSession.mockClear();
-    }),
-  );
-  it.effect("serializes recovery with explicit starts for the same inactive thread", () => {
-    const originalStartSession = routing.codex.startSession.getMockImplementation();
-    if (!originalStartSession) throw new Error("fake Codex adapter has no start implementation");
-
-    return Effect.gen(function* () {
-      const provider = yield* ProviderService.ProviderService;
-      const threadId = asThreadId("concurrent-goal-recovery-thread");
-      yield* provider.startSession(threadId, {
-        provider: CODEX_DRIVER,
-        providerInstanceId: codexInstanceId,
-        threadId,
-        cwd: fixtureCwd("concurrent-goal-recovery-thread"),
-        runtimeMode: "full-access",
-      });
-      yield* provider.stopSession({ threadId });
-      routing.codex.startSession.mockClear();
-
-      const firstRecoveryStarted = yield* Deferred.make<void>();
-      const releaseFirstRecovery = yield* Deferred.make<void>();
-      routing.codex.startSession.mockImplementation((input) =>
-        Deferred.succeed(firstRecoveryStarted, undefined).pipe(
-          Effect.andThen(Deferred.await(releaseFirstRecovery)),
-          Effect.andThen(originalStartSession(input)),
-        ),
-      );
-
-      const first = yield* provider
-        .setCodexGoal({ threadId, objective: "First recovery" })
-        .pipe(Effect.forkChild);
-      yield* Deferred.await(firstRecoveryStarted);
-      const second = yield* provider.clearCodexGoal(threadId).pipe(Effect.forkChild);
-      const explicitStart = yield* provider
-        .startSession(threadId, {
-          provider: CODEX_DRIVER,
-          providerInstanceId: codexInstanceId,
-          threadId,
-          cwd: fixtureCwd("concurrent-goal-recovery-thread"),
-          runtimeMode: "full-access",
-        })
-        .pipe(Effect.forkChild);
-      yield* Effect.yieldNow;
-
-      assert.equal(routing.codex.startSession.mock.calls.length, 1);
-      yield* Deferred.succeed(releaseFirstRecovery, undefined);
-      yield* Fiber.join(first);
-      yield* Fiber.join(second);
-      yield* Fiber.join(explicitStart);
-      assert.equal(routing.codex.startSession.mock.calls.length, 2);
-      yield* provider.stopSession({ threadId });
-      routing.codex.startSession.mockClear();
-      routing.codex.stopSession.mockClear();
-    }).pipe(
-      Effect.ensuring(
-        Effect.sync(() => routing.codex.startSession.mockImplementation(originalStartSession)),
-      ),
-    );
-  });
-  it.effect("serializes recovered Goal mutations with session stops", () => {
-    const originalStartSession = routing.codex.startSession.getMockImplementation();
-    const originalSetCodexGoal = routing.codex.setCodexGoal.getMockImplementation();
-    if (!originalStartSession || !originalSetCodexGoal) {
-      throw new Error("fake Codex adapter has no Goal recovery implementation");
-    }
-
-    return Effect.gen(function* () {
-      const provider = yield* ProviderService.ProviderService;
-      const threadId = asThreadId("goal-recovery-stop-race-thread");
-      yield* provider.startSession(threadId, {
-        provider: CODEX_DRIVER,
-        providerInstanceId: codexInstanceId,
-        threadId,
-        cwd: fixtureCwd("goal-recovery-stop-race-thread"),
-        runtimeMode: "full-access",
-      });
-      yield* provider.stopSession({ threadId });
-      routing.codex.stopSession.mockClear();
-
-      const recoveryStarted = yield* Deferred.make<void>();
-      const releaseRecovery = yield* Deferred.make<void>();
-      const mutationStarted = yield* Deferred.make<void>();
-      const releaseMutation = yield* Deferred.make<void>();
-      routing.codex.startSession.mockImplementation((input) =>
-        Deferred.succeed(recoveryStarted, undefined).pipe(
-          Effect.andThen(Deferred.await(releaseRecovery)),
-          Effect.andThen(originalStartSession(input)),
-        ),
-      );
-      routing.codex.setCodexGoal.mockImplementation((input) =>
-        Deferred.succeed(mutationStarted, undefined).pipe(
-          Effect.andThen(Deferred.await(releaseMutation)),
-          Effect.andThen(originalSetCodexGoal(input)),
-        ),
-      );
-
-      const mutation = yield* provider
-        .setCodexGoal({ threadId, objective: "Resume safely" })
-        .pipe(Effect.forkChild);
-      yield* Deferred.await(recoveryStarted);
-      const stop = yield* provider.stopSession({ threadId }).pipe(Effect.forkChild);
-      yield* Effect.yieldNow;
-      assert.equal(routing.codex.stopSession.mock.calls.length, 0);
-
-      yield* Deferred.succeed(releaseRecovery, undefined);
-      yield* Deferred.await(mutationStarted);
-      yield* Effect.yieldNow;
-      assert.equal(routing.codex.stopSession.mock.calls.length, 0);
-
-      yield* Deferred.succeed(releaseMutation, undefined);
-      yield* Fiber.join(mutation);
-      yield* Fiber.join(stop);
-      assert.equal(routing.codex.stopSession.mock.calls.length, 1);
-    }).pipe(
-      Effect.ensuring(
-        Effect.sync(() => {
-          routing.codex.startSession.mockImplementation(originalStartSession);
-          routing.codex.setCodexGoal.mockImplementation(originalSetCodexGoal);
-        }),
-      ),
-    );
-  });
-  it.effect("keeps native Codex Goals scoped to their routed threads", () =>
-    Effect.gen(function* () {
-      const provider = yield* ProviderService.ProviderService;
-      const goals = [
-        [asThreadId("goal-thread-1"), "First thread Goal"],
-        [asThreadId("goal-thread-2"), "Second thread Goal"],
-      ] as const;
-      yield* Effect.forEach(
-        goals,
-        ([threadId, objective]) =>
-          Effect.gen(function* () {
-            yield* provider.startSession(threadId, {
-              provider: CODEX_DRIVER,
-              providerInstanceId: codexInstanceId,
-              threadId,
-              cwd: fixtureCwd(threadId),
-              runtimeMode: "full-access",
-            });
-            const goal = yield* provider.setCodexGoal({ threadId, objective, status: "active" });
-            assert.equal(goal.objective, objective);
-          }),
-        { discard: true },
-      );
-      assert.deepEqual(
-        routing.codex.setCodexGoal.mock.calls.slice(-2).map(([input]) => input.threadId),
-        goals.map(([threadId]) => threadId),
-      );
-      yield* Effect.forEach(goals, ([threadId]) => provider.stopSession({ threadId }), {
-        discard: true,
-      });
-      routing.codex.startSession.mockClear();
-      routing.codex.stopSession.mockClear();
-    }),
-  );
   it.effect.each([CODEX_DRIVER, CLAUDE_AGENT_DRIVER, CURSOR_DRIVER])(
     "rejects missing, file, and saved workspace paths before starting %s",
     (driver) =>

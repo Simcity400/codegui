@@ -1,4 +1,3 @@
-import IconTarget from "@tabler/icons-react-native/IconTarget";
 import type { Icon } from "@tabler/icons-react-native/types";
 /*
  * Keep these as per-icon exports. Importing the package root eagerly registers
@@ -129,7 +128,6 @@ const ANDROID_ICON_BY_SF_SYMBOL = {
   "arrow.up.right.circle": IconArrowUpRightCircle,
   "arrow.uturn.backward": IconArrowBackUp,
   "arrow.uturn.forward": IconArrowForwardUp,
-  target: IconTarget,
   archivebox: IconArchive,
   "archivebox.fill": IconArchive,
   "bell.badge": IconBellRinging,

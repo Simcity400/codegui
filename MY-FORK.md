@@ -2,17 +2,14 @@
 
 This fork follows T3 Code with these personal additions:
 
-- Subagent transcripts in the side panel, with a dedicated mobile view.
-- Codex and Claude `/side` conversations that inherit their parent's context.
-- Provider usage limits in the input bar's context-circle popup.
-- Codex goals: `/goal`, token budgets, pause, resume, and clear.
+- Subagent panel and transcripts, with a dedicated mobile view.
 - Personal Windows x64/ARM64 updates and iPhone preview releases.
 - Automatic nightly integration and an in-app action to resolve blocked merges.
 
 Everything else follows upstream. The earlier fork is archived at
-`archive/pre-simplification-20260908` for reference. Database compatibility preserves
-existing threads, goals, and side-chat relationships without taking over upstream's
-migration numbering.
+`archive/pre-simplification-20260908` for reference. Database compatibility keeps
+databases written by earlier fork builds readable, including events and columns from
+removed features, without taking over upstream's migration numbering.
 
 ## Windows updates
 

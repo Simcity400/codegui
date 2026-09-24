@@ -128,31 +128,6 @@ describe("DesktopUpdates", () => {
     ).pipe(Effect.provide(Layer.merge(TestClock.layer(), harness.layer)));
   });
 
-  it.effect("still offers and downloads a discovered update after a background check fails", () => {
-    const harness = makeHarness({
-      checkForUpdates: Effect.fail(
-        new ElectronUpdater.ElectronUpdaterCheckForUpdatesError({
-          channel: "nightly",
-          cause: new Error("offline"),
-        }),
-      ),
-    });
-    return Effect.scoped(
-      Effect.gen(function* () {
-        const updates = yield* DesktopUpdates.DesktopUpdates;
-        yield* updates.configure;
-        harness.emit("update-available", { version: "1.2.4" });
-        yield* flushCallbacks;
-        yield* updates.check("poll");
-        assert.equal((yield* updates.getState).status, "available");
-        assert.equal(harness.sentStates.at(-1)?.availableVersion, "1.2.4");
-        const downloaded = yield* updates.download;
-        assert.isTrue(downloaded.accepted);
-        assert.isTrue(downloaded.completed);
-      }),
-    ).pipe(Effect.provide(Layer.merge(TestClock.layer(), harness.layer)));
-  });
-
   it.effect("enables nightly full changelog release notes and broadcasts summaries", () => {
     const harness = makeHarness();
 

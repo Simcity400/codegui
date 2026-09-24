@@ -4,7 +4,6 @@ import { ProviderInstanceId, type ModelSelection, type ServerConfig } from "@t3t
 
 import {
   buildModelOptions,
-  filterThreadProviderGroups,
   groupByProvider,
   isModelSelectionUnavailable,
   resolveDefaultableModelSelection,
@@ -14,36 +13,6 @@ import {
 } from "./modelOptions";
 
 describe("mobile model options", () => {
-  it.each(["codex", "claudeAgent"])(
-    "offers compatible %s accounts in both directions",
-    (driver) => {
-      const providers = [
-        { instanceId: "work", driver, continuation: { groupKey: "shared" } },
-        { instanceId: "personal", driver, continuation: { groupKey: "shared" } },
-        { instanceId: "isolated", driver, continuation: { groupKey: "isolated" } },
-        { instanceId: "other", driver: "other", continuation: { groupKey: "shared" } },
-        { instanceId: "unknown", driver },
-      ];
-      const config = { providers } as unknown as ServerConfig;
-      const groups = providers.map((provider) => ({
-        providerKey: provider.instanceId,
-        providerLabel: provider.instanceId,
-        models: [],
-      }));
-      for (const current of ["work", "personal"]) {
-        expect(
-          filterThreadProviderGroups(groups, config, ProviderInstanceId.make(current)),
-        ).toEqual(groups.slice(0, 2));
-      }
-      expect(
-        filterThreadProviderGroups(groups, config, ProviderInstanceId.make("unknown")),
-      ).toEqual([groups[4]]);
-      expect(filterThreadProviderGroups(groups, null, ProviderInstanceId.make("work"))).toEqual([
-        groups[0],
-      ]);
-    },
-  );
-
   it("groups models by provider and flags legacy entries", () => {
     const config = {
       providers: [

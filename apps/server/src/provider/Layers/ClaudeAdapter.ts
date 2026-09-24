@@ -475,7 +475,6 @@ interface ClaudeQueryRuntime extends AsyncIterable<SDKMessage> {
   readonly setPermissionMode: (mode: PermissionMode) => Promise<void>;
   readonly setMaxThinkingTokens: (maxThinkingTokens: number | null) => Promise<void>;
   readonly close: () => void;
-  readonly return: () => Promise<IteratorResult<SDKMessage, void>>;
 }
 
 export interface ClaudeAdapterLiveOptions {
@@ -4311,22 +4310,7 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
     context: ClaudeSessionContext,
     options?: { readonly emitExitEvent?: boolean },
   ) {
-    const awaitCleanup = Effect.tryPromise({
-      try: () => context.query.return(),
-      catch: (cause) =>
-        new ProviderAdapterProcessError({
-          provider: PROVIDER,
-          threadId: context.session.threadId,
-          detail: "Failed to finish closing Claude runtime query.",
-          cause,
-        }),
-    });
-    if (context.stopped) {
-      yield* awaitCleanup;
-      if (sessions.get(context.session.threadId) === context)
-        sessions.delete(context.session.threadId);
-      return;
-    }
+    if (context.stopped) return;
 
     // Schedule process termination before any cleanup that can wait on the
     // provider. The SDK closes stdin, then escalates from SIGTERM to SIGKILL.
@@ -4401,10 +4385,6 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
     if (streamFiber && streamFiber.pollUnsafe() === undefined) {
       yield* Fiber.interrupt(streamFiber);
     }
-
-    // close() only initiates cleanup. Await the SDK's flush and process exit
-    // before another account can copy and resume this native conversation.
-    yield* awaitCleanup;
 
     const updatedAt = yield* nowIso;
     context.session = {
@@ -4485,10 +4465,8 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
       const resumeState = readClaudeResumeState(input.resumeCursor);
       const threadId = input.threadId;
       const existingResumeSessionId = resumeState?.resume;
-      const isForkingSession = input.forkFromThreadId !== undefined;
-      const newSessionId =
-        existingResumeSessionId === undefined || isForkingSession ? yield* randomUUIDv4 : undefined;
-      const sessionId = isForkingSession ? newSessionId : (existingResumeSessionId ?? newSessionId);
+      const newSessionId = existingResumeSessionId === undefined ? yield* randomUUIDv4 : undefined;
+      const sessionId = existingResumeSessionId ?? newSessionId;
 
       const runtimeContext = yield* Effect.context<never>();
       const runFork = Effect.runForkWith(runtimeContext);
@@ -5012,7 +4990,6 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
         ...(Object.keys(settings).length > 0 ? { settings } : {}),
         ...(existingResumeSessionId ? { resume: existingResumeSessionId } : {}),
         ...(newSessionId ? { sessionId: newSessionId } : {}),
-        ...(isForkingSession ? { forkSession: true } : {}),
         includePartialMessages: true,
         forwardSubagentText: true,
         canUseTool,

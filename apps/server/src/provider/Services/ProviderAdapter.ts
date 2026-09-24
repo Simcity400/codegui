@@ -8,9 +8,6 @@
  * @module ProviderAdapter
  */
 import type {
-  CodexGoal,
-  CodexGoalClearResult,
-  CodexGoalSetInput,
   ApprovalRequestId,
   ProviderApprovalDecision,
   ProviderDriverKind,
@@ -27,7 +24,6 @@ import type {
 } from "@t3tools/contracts";
 import type * as Effect from "effect/Effect";
 import type * as Stream from "effect/Stream";
-import type { ProviderContinuationIdentity } from "../ProviderDriver.ts";
 
 export type ProviderSessionModelSwitchMode = "in-session" | "unsupported";
 
@@ -81,12 +77,6 @@ export interface ProviderAdapterShape<TError> {
   readonly startSession: (
     input: ProviderSessionStartInput,
   ) => Effect.Effect<ProviderSession, TError>;
-
-  /** Called after stopping the source account, before resuming on this adapter. */
-  readonly transferSession?: (input: {
-    readonly source: ProviderContinuationIdentity;
-    readonly resumeCursor: unknown;
-  }) => Effect.Effect<void, TError>;
 
   /**
    * Send a turn to an active provider session.
@@ -148,12 +138,6 @@ export interface ProviderAdapterShape<TError> {
     threadId: ThreadId,
     numTurns: number,
   ) => Effect.Effect<ProviderThreadSnapshot, TError>;
-
-  /** Native Codex Goal operations. Absent for providers that do not support them. */
-  readonly codexGoal?: {
-    readonly set: (input: CodexGoalSetInput) => Effect.Effect<CodexGoal, TError>;
-    readonly clear: (threadId: ThreadId) => Effect.Effect<CodexGoalClearResult, TError>;
-  };
 
   /**
    * Upload a thread to the provider when the adapter supports feedback.

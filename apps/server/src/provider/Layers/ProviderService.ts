@@ -1,5 +1,3 @@
-import * as RcMap from "effect/RcMap";
-import * as Semaphore from "effect/Semaphore";
 /**
  * ProviderServiceLive - Cross-provider orchestration layer.
  *
@@ -13,7 +11,6 @@ import * as Semaphore from "effect/Semaphore";
  */
 import {
   EventId,
-  CodexGoalSetInput,
   MessageId,
   ModelSelection,
   NonNegativeInt,
@@ -1227,13 +1224,6 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
     () => reconcileInstanceSubscriptions,
   ).pipe(Effect.forkScoped);
 
-  const recoveryLocks = yield* RcMap.make({ lookup: (_threadId: ThreadId) => Semaphore.make(1) });
-  const withRecoveryLock = <A, E, R>(threadId: ThreadId, effect: Effect.Effect<A, E, R>) =>
-    RcMap.get(recoveryLocks, threadId).pipe(
-      Effect.flatMap((lock) => lock.withPermit(effect)),
-      Effect.scoped,
-    );
-
   const recoverSessionForThread = Effect.fn("recoverSessionForThread")(function* (input: {
     readonly binding: ProviderSessionDirectory.ProviderRuntimeBinding;
     readonly operation: string;
@@ -1323,7 +1313,6 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
     readonly threadId: ThreadId;
     readonly operation: string;
     readonly allowRecovery: boolean;
-    readonly recoveryLockHeld?: boolean;
   }) {
     const bindingOption = yield* directory.getBinding(input.threadId);
     const binding = Option.getOrUndefined(bindingOption);
@@ -1357,10 +1346,10 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
       } as const;
     }
 
-    const recover = recoverSessionForThread({ binding, operation: input.operation });
-    const recovered = yield* input.recoveryLockHeld
-      ? recover
-      : withRecoveryLock(input.threadId, recover);
+    const recovered = yield* recoverSessionForThread({
+      binding,
+      operation: input.operation,
+    });
     return {
       adapter: recovered.adapter,
       instanceId,
@@ -1446,10 +1435,6 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
           );
         }
         const persistedBinding = Option.getOrUndefined(yield* directory.getBinding(threadId));
-        let transferSource: ProviderAdapterRegistry.ProviderInstanceRoutingInfo | undefined;
-        let hasCompatiblePersistedBinding =
-          persistedBinding?.provider === resolvedProvider &&
-          persistedBinding.providerInstanceId === resolvedInstanceId;
         if (
           persistedBinding?.provider === resolvedProvider &&
           persistedBinding.providerInstanceId !== resolvedInstanceId &&
@@ -1469,62 +1454,15 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
               `Thread '${threadId}' cannot switch from instance '${previousInstanceId}' to '${resolvedInstanceId}' because their provider resume state is incompatible.`,
             );
           }
-          hasCompatiblePersistedBinding = true;
-          transferSource = previousInfo;
         }
-        const hasCompatiblePersistedCursor =
-          hasCompatiblePersistedBinding &&
-          persistedBinding !== undefined &&
-          persistedBinding.resumeCursor !== null &&
-          persistedBinding.resumeCursor !== undefined;
-        const shouldForkFromParent =
-          input.forkFromThreadId !== undefined &&
-          input.resumeCursor === undefined &&
-          !hasCompatiblePersistedCursor;
-        if (
-          shouldForkFromParent &&
-          resolvedProvider !== "codex" &&
-          resolvedProvider !== "claudeAgent"
-        ) {
-          return yield* toValidationError(
-            "ProviderService.startSession",
-            `Provider '${resolvedProvider}' does not support side-chat forks.`,
-          );
-        }
-        const parentBinding = shouldForkFromParent
-          ? Option.getOrUndefined(yield* directory.getBinding(input.forkFromThreadId!))
-          : undefined;
-        if (shouldForkFromParent && parentBinding === undefined) {
-          return yield* toValidationError(
-            "ProviderService.startSession",
-            `Cannot fork thread '${input.forkFromThreadId}': its provider continuation is unavailable.`,
-          );
-        }
-        if (shouldForkFromParent && parentBinding?.providerInstanceId !== resolvedInstanceId) {
-          return yield* toValidationError(
-            "ProviderService.startSession",
-            `Cannot fork thread '${input.forkFromThreadId}' with a different provider instance.`,
-          );
-        }
-        if (
-          shouldForkFromParent &&
-          (parentBinding?.resumeCursor === null || parentBinding?.resumeCursor === undefined)
-        ) {
-          return yield* toValidationError(
-            "ProviderService.startSession",
-            `Cannot fork thread '${input.forkFromThreadId}': it has no resumable provider context.`,
-          );
-        }
-        let effectiveResumeCursor =
+        const effectiveResumeCursor =
           input.resumeCursor ??
-          (hasCompatiblePersistedCursor
+          (persistedBinding?.providerInstanceId === resolvedInstanceId
             ? persistedBinding.resumeCursor
-            : shouldForkFromParent
-              ? parentBinding?.resumeCursor
-              : undefined);
+            : undefined);
         const effectiveCwd =
           input.cwd ??
-          (hasCompatiblePersistedBinding && persistedBinding !== undefined
+          (persistedBinding?.providerInstanceId === resolvedInstanceId
             ? readPersistedCwd(persistedBinding.runtimePayload)
             : undefined);
         yield* Effect.annotateCurrentSpan({
@@ -1532,14 +1470,16 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
           "provider.resume_cursor.source":
             input.resumeCursor !== undefined
               ? "request"
-              : effectiveResumeCursor !== undefined && hasCompatiblePersistedBinding
+              : effectiveResumeCursor !== undefined &&
+                  persistedBinding?.providerInstanceId === resolvedInstanceId
                 ? "persisted"
                 : "none",
           "provider.resume_cursor.present": effectiveResumeCursor !== undefined,
           "provider.cwd.source":
             input.cwd !== undefined
               ? "request"
-              : effectiveCwd !== undefined && hasCompatiblePersistedBinding
+              : effectiveCwd !== undefined &&
+                  persistedBinding?.providerInstanceId === resolvedInstanceId
                 ? "persisted"
                 : "none",
           "provider.cwd.effective": effectiveCwd ?? "",
@@ -1559,44 +1499,11 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
           }
         }
         const adapter = yield* registry.getByInstance(resolvedInstanceId);
-        if (transferSource !== undefined && effectiveResumeCursor !== undefined) {
-          // Shared native history can have only one writer, even when the
-          // destination does not need a transfer hook (for example, Codex).
-          // Release the source before attempting to resume the destination.
-          const sourceAdapter = yield* registry.getByInstance(transferSource.instanceId);
-          const sourceSession = (yield* sourceAdapter.listSessions()).find(
-            (session) => session.threadId === threadId,
-          );
-          if (sourceSession !== undefined) {
-            effectiveResumeCursor =
-              input.resumeCursor ?? sourceSession.resumeCursor ?? effectiveResumeCursor;
-            yield* upsertSessionBinding(
-              { ...sourceSession, providerInstanceId: transferSource.instanceId },
-              threadId,
-            );
-            yield* sourceAdapter.stopSession(threadId);
-            yield* directory.upsert({
-              threadId,
-              provider: resolvedProvider,
-              providerInstanceId: transferSource.instanceId,
-              status: "stopped",
-              runtimePayload: { activeTurnId: null },
-            });
-          }
-          if (adapter.transferSession !== undefined) {
-            yield* adapter.transferSession({
-              source: transferSource.continuationIdentity,
-              resumeCursor: effectiveResumeCursor,
-            });
-          }
-        }
         yield* clearTurnAnalyticsSession(resolvedInstanceId, threadId);
         yield* prepareMcpSession(threadId, resolvedInstanceId);
-        const { forkFromThreadId: _forkFromThreadId, ...adapterInput } = input;
         const session = yield* adapter
           .startSession({
-            ...adapterInput,
-            ...(shouldForkFromParent ? { forkFromThreadId: input.forkFromThreadId } : {}),
+            ...input,
             providerInstanceId: resolvedInstanceId,
             ...(effectiveCwd !== undefined ? { cwd: effectiveCwd } : {}),
             ...(effectiveResumeCursor !== undefined ? { resumeCursor: effectiveResumeCursor } : {}),
@@ -1648,7 +1555,6 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
 
         return sessionWithInstance;
       }).pipe(
-        (operation) => withRecoveryLock(threadId, operation),
         withMetrics({
           counter: providerSessionsTotal,
           attributes: () =>
@@ -2177,7 +2083,6 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
           provider: routed.adapter.provider,
         });
       }).pipe(
-        (operation) => withRecoveryLock(input.threadId, operation),
         withMetrics({
           counter: providerSessionsTotal,
           outcomeAttributes: () =>
@@ -2493,58 +2398,6 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
     ),
   );
 
-  // Goal mutations recover a stopped Codex session on purpose: resuming with
-  // an active goal is exactly how Codex picks the goal back up, and the
-  // resumed session re-emits the goal snapshot that keeps the projection
-  // current. Reads never hit the provider; clients use the projected thread.
-  const resolveCodexGoalRoute = Effect.fn("resolveCodexGoalRoute")(function* (
-    threadId: ThreadId,
-    operation: "set" | "clear",
-  ) {
-    const operationName = `ProviderService.${operation}CodexGoal`;
-    const routeInput = { threadId, operation: operationName };
-    let routed = yield* resolveRoutableSession({ ...routeInput, allowRecovery: false });
-    const unsupported = () =>
-      toValidationError(
-        operationName,
-        `Provider '${routed.adapter.provider}' does not support native Codex Goals.`,
-      );
-    if (!routed.adapter.codexGoal) return yield* unsupported();
-    if (!routed.isActive) {
-      routed = yield* resolveRoutableSession({
-        ...routeInput,
-        allowRecovery: true,
-        recoveryLockHeld: true,
-      });
-    }
-    const goal = routed.adapter.codexGoal;
-    if (!goal) return yield* unsupported();
-    return { routed, goal } as const;
-  });
-
-  const setCodexGoal: ProviderServiceMethod<"setCodexGoal"> = Effect.fn("setCodexGoal")(
-    function* (rawInput) {
-      const input = yield* decodeInputOrValidationError({
-        operation: "ProviderService.setCodexGoal",
-        schema: CodexGoalSetInput,
-        payload: rawInput,
-      });
-      return yield* Effect.gen(function* () {
-        const { goal } = yield* resolveCodexGoalRoute(input.threadId, "set");
-        return yield* goal.set(input);
-      }).pipe((set) => withRecoveryLock(input.threadId, set));
-    },
-  );
-
-  const clearCodexGoal: ProviderServiceMethod<"clearCodexGoal"> = Effect.fn("clearCodexGoal")(
-    function* (threadId) {
-      return yield* Effect.gen(function* () {
-        const { routed, goal } = yield* resolveCodexGoalRoute(threadId, "clear");
-        return yield* goal.clear(routed.threadId);
-      }).pipe((clear) => withRecoveryLock(threadId, clear));
-    },
-  );
-
   return {
     startSession,
     sendTurn,
@@ -2559,8 +2412,6 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
     assertConversationRollbackSupported,
     rollbackConversation,
     uploadFeedback,
-    setCodexGoal,
-    clearCodexGoal,
     // Each access creates a fresh PubSub subscription so that multiple
     // consumers (ProviderRuntimeIngestion, CheckpointReactor, etc.) each
     // independently receive all runtime events.

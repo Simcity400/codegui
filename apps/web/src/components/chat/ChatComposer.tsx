@@ -31,7 +31,6 @@ import type {
   RuntimeMode,
   ScopedThreadRef,
   ServerProvider,
-  ServerProviderUsageLimits,
   ThreadId,
   SnapShotSource,
 } from "@t3tools/contracts";
@@ -949,7 +948,6 @@ import {
 } from "../../providerInstances";
 import { type AppModelOption, getAppModelOptionsForInstance } from "../../modelSelection";
 import type { UnifiedSettings } from "@t3tools/contracts/settings";
-import type { TimestampFormat } from "@t3tools/contracts/settings";
 import {
   isVideoAttachment,
   type ChatMessage,
@@ -1214,9 +1212,6 @@ const ComposerFooterPrimaryActions = memo(function ComposerFooterPrimaryActions(
   onCompactContext?: (() => void) | undefined;
   compactDisabled: boolean;
   compactDisabledReason: string | null;
-  usageLimits?: ServerProviderUsageLimits | null;
-  accountLabel?: string | null;
-  timestampFormat?: TimestampFormat;
 }) {
   return (
     <>
@@ -1227,9 +1222,6 @@ const ComposerFooterPrimaryActions = memo(function ComposerFooterPrimaryActions(
           onCompact={props.onCompactContext}
           compactDisabled={props.compactDisabled}
           compactDisabledReason={props.compactDisabledReason}
-          usageLimits={props.usageLimits}
-          accountLabel={props.accountLabel}
-          timestampFormat={props.timestampFormat}
         />
       ) : props.reserveContextWindowMeter ? (
         <ContextWindowMeterPlaceholder />
@@ -2389,22 +2381,8 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
         selectedProviderSkills,
         settings.showSkillsInSlashMenu,
       );
-      const forkSlashCommands = [
-        ...(selectedProvider === "codex"
-          ? [{ name: "goal", description: "Set or manage this thread's goal" }]
-          : []),
-        ...(selectedProvider === "codex" || selectedProvider === "claudeAgent"
-          ? [{ name: "side", description: "Start a side chat" }]
-          : []),
-      ];
       const providerSlashCommandItems = getProviderSlashCommandsForSlashMenu(
-        [
-          ...selectedProviderSlashCommands,
-          ...forkSlashCommands.filter(
-            (command) =>
-              !selectedProviderSlashCommands.some((existing) => existing.name === command.name),
-          ),
-        ],
+        selectedProviderSlashCommands,
         slashMenuSkills,
       ).map((command) => ({
         id: `provider-slash-command:${selectedProvider}:${command.name}`,
@@ -7072,9 +7050,6 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                       compactDisabled || noProviderAvailable || isSendBusy || isConnecting
                     }
                     compactDisabledReason={resolvedCompactDisabledReason}
-                    usageLimits={selectedProviderEntry?.snapshot?.usageLimits ?? null}
-                    accountLabel={selectedProviderEntry?.snapshot?.auth.label ?? null}
-                    timestampFormat={settings.timestampFormat ?? "locale"}
                     {...(compactCommandAvailable ? { onCompactContext: compactThreadContext } : {})}
                   />
                 </div>

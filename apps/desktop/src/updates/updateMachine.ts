@@ -45,13 +45,12 @@ export function reduceDesktopUpdateStateOnCheckStart(
   checkedAt: string,
 ): DesktopUpdateState {
   const hasDownloadedUpdate = state.downloadedVersion !== null;
-  const hasKnownUpdate = hasDownloadedUpdate || state.availableVersion !== null;
   return {
     ...state,
     status: "checking",
     checkedAt,
-    releaseNotes: hasKnownUpdate ? state.releaseNotes : [],
-    omittedReleaseCount: hasKnownUpdate ? state.omittedReleaseCount : 0,
+    releaseNotes: hasDownloadedUpdate ? state.releaseNotes : [],
+    omittedReleaseCount: hasDownloadedUpdate ? state.omittedReleaseCount : 0,
     message: null,
     downloadPercent: hasDownloadedUpdate ? 100 : null,
     errorContext: null,
@@ -78,8 +77,7 @@ export function reduceDesktopUpdateStateOnCheckFailure(
 
   return {
     ...state,
-    // The updater retains the previous download target when a later feed check fails.
-    status: state.availableVersion !== null ? "available" : "error",
+    status: "error",
     message,
     checkedAt,
     downloadPercent: null,

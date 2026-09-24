@@ -91,8 +91,6 @@ export interface ProviderInstance {
 export interface ProviderContinuationIdentity {
   readonly driverKind: ProviderDriverKind;
   readonly continuationKey: string;
-  /** Native storage used by adapters that transfer sessions between account homes. */
-  readonly stateDirectory?: string;
 }
 
 export function defaultProviderContinuationIdentity(input: {

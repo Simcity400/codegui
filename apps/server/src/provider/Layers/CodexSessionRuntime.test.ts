@@ -15,8 +15,8 @@ import {
   buildTurnStartParams,
   describeMcpElicitation,
   hasConfiguredMcpServer,
+  isRecoverableThreadResumeError,
   makeMemoryConsolidationNotificationFilter,
-  makeCodexGoalRequests,
   openCodexThread,
   readCodexThread,
   rollbackCodexThread,
@@ -109,53 +109,6 @@ describe("Codex thread history", () => {
         threadId: "legacy-thread",
         turns: [],
       });
-    }),
-  );
-});
-
-describe("makeCodexGoalRequests", () => {
-  it.effect("targets the active provider thread with native Goal methods", () =>
-    Effect.gen(function* () {
-      const calls: Array<{ readonly method: string; readonly payload: unknown }> = [];
-      const goal = {
-        threadId: "provider-thread-42",
-        objective: "Ship Goal controls",
-        status: "active" as const,
-        tokensUsed: 0,
-        timeUsedSeconds: 0,
-        createdAt: 1_777_000_000,
-        updatedAt: 1_777_000_000,
-      };
-      const client = {
-        request: <M extends CodexRpc.ClientRequestMethod>(
-          method: M,
-          payload: CodexRpc.ClientRequestParamsByMethod[M],
-        ) => {
-          calls.push({ method, payload });
-          const response = method === "thread/goal/clear" ? { cleared: true } : { goal };
-          return Effect.succeed(response as CodexRpc.ClientRequestResponsesByMethod[M]);
-        },
-      };
-      const requests = makeCodexGoalRequests(client, Effect.succeed("provider-thread-42"));
-
-      yield* requests.setGoal({ objective: "Steer Goal", status: "paused", tokenBudget: 42 });
-      const snapshot = yield* requests.getGoal;
-      NodeAssert.deepStrictEqual(snapshot.goal, goal);
-      yield* requests.clearGoal;
-
-      NodeAssert.deepStrictEqual(calls, [
-        {
-          method: "thread/goal/set",
-          payload: {
-            threadId: "provider-thread-42",
-            objective: "Steer Goal",
-            status: "paused",
-            tokenBudget: 42,
-          },
-        },
-        { method: "thread/goal/get", payload: { threadId: "provider-thread-42" } },
-        { method: "thread/goal/clear", payload: { threadId: "provider-thread-42" } },
-      ]);
     }),
   );
 });
@@ -876,35 +829,66 @@ describe("codexSessionAppServerArgs", () => {
   });
 });
 
-describe("openCodexThread", () => {
-  it.effect("forks the parent conversation into a new native thread", () =>
-    Effect.gen(function* () {
-      const calls: Array<{ method: string; payload: unknown }> = [];
-      const opened = yield* openCodexThread({
-        client: {
-          request: () => Effect.die("A side chat must fork, not start blank"),
-          raw: {
-            request: (method, payload) => {
-              calls.push({ method, payload });
-              return Effect.succeed(makeThreadOpenResponse("child-thread"));
-            },
-          },
-        },
-        threadId: ThreadId.make("side-chat"),
-        runtimeMode: "full-access",
-        cwd: "/tmp/project",
-        requestedModel: undefined,
-        serviceTier: undefined,
-        resumeThreadId: undefined,
-        forkThreadId: "parent-thread",
-      });
-      NodeAssert.equal(opened.thread.id, "child-thread");
-      NodeAssert.equal(calls.length, 1);
-      NodeAssert.equal(calls[0]?.method, "thread/fork");
-      NodeAssert.equal((calls[0]?.payload as { threadId: string }).threadId, "parent-thread");
-    }),
-  );
+describe("isRecoverableThreadResumeError", () => {
+  it("matches missing thread errors", () => {
+    NodeAssert.equal(
+      isRecoverableThreadResumeError(
+        new CodexErrors.CodexAppServerRequestError({
+          code: -32603,
+          errorMessage: "Thread does not exist",
+        }),
+      ),
+      true,
+    );
+  });
 
+  it("matches a missing rollout for a known thread id", () => {
+    NodeAssert.equal(
+      isRecoverableThreadResumeError(
+        new CodexErrors.CodexAppServerRequestError({
+          code: -32603,
+          errorMessage: "no rollout found for thread id 019fdf74-aaa9-7950-b252-7cc7a8650470",
+        }),
+      ),
+      true,
+    );
+  });
+
+  it("ignores non-recoverable resume errors", () => {
+    NodeAssert.equal(
+      isRecoverableThreadResumeError(
+        new CodexErrors.CodexAppServerRequestError({
+          code: -32603,
+          errorMessage: "Permission denied",
+        }),
+      ),
+      false,
+    );
+  });
+
+  it("ignores unrelated missing-resource errors that do not mention threads", () => {
+    NodeAssert.equal(
+      isRecoverableThreadResumeError(
+        new CodexErrors.CodexAppServerRequestError({
+          code: -32603,
+          errorMessage: "Config file not found",
+        }),
+      ),
+      false,
+    );
+    NodeAssert.equal(
+      isRecoverableThreadResumeError(
+        new CodexErrors.CodexAppServerRequestError({
+          code: -32603,
+          errorMessage: "Model does not exist",
+        }),
+      ),
+      false,
+    );
+  });
+});
+
+describe("openCodexThread", () => {
   it.effect("resumes metadata when historical turns contain unknown error values", () =>
     Effect.gen(function* () {
       const response = makeThreadOpenResponse("saved-thread");
@@ -997,65 +981,79 @@ describe("openCodexThread", () => {
     }),
   );
 
-  it.effect("rejects a resume response for a different native thread", () =>
+  it.effect("falls back to thread/start when resume fails recoverably", () =>
     Effect.gen(function* () {
-      const error = yield* openCodexThread({
-        client: {
-          request: () => Effect.die("Resuming must not start a fresh thread"),
-          raw: { request: () => Effect.succeed(makeThreadOpenResponse("different-thread")) },
+      const calls: Array<{ method: "thread/start" | "thread/resume"; payload: unknown }> = [];
+      const started = makeThreadOpenResponse("fresh-thread");
+      const client = {
+        raw: {
+          request: (
+            method: "thread/resume",
+            payload: CodexRpc.ClientRequestParamsByMethod["thread/resume"],
+          ) => {
+            calls.push({ method, payload });
+            return Effect.fail(
+              new CodexErrors.CodexAppServerRequestError({
+                code: -32603,
+                errorMessage: "thread not found",
+              }),
+            );
+          },
         },
+        request: (
+          method: "thread/start",
+          payload: CodexRpc.ClientRequestParamsByMethod["thread/start"],
+        ) => {
+          calls.push({ method, payload });
+          return Effect.succeed(started);
+        },
+      };
+
+      const opened = yield* openCodexThread({
+        client,
         threadId: ThreadId.make("thread-1"),
         runtimeMode: "full-access",
         cwd: "/tmp/project",
         requestedModel: "gpt-5.3-codex",
         serviceTier: undefined,
-        resumeThreadId: "saved-thread",
-      }).pipe(Effect.flip);
-      NodeAssert.ok(isCodexAppServerRequestError(error));
-      NodeAssert.equal(error.method, "thread/resume");
-      NodeAssert.equal(
-        error.errorMessage,
-        "Codex resumed thread 'different-thread' instead of 'saved-thread'.",
+        resumeThreadId: "stale-thread",
+      });
+
+      NodeAssert.equal(opened.thread.id, "fresh-thread");
+      NodeAssert.deepStrictEqual(
+        calls.map((call) => call.method),
+        ["thread/resume", "thread/start"],
       );
     }),
   );
 
-  for (const errorMessage of [
-    "thread not found",
-    "Thread does not exist",
-    "no rollout found for thread id saved-thread",
-    "thread saved-thread already has an active writer",
-    "Permission denied",
-    "timed out waiting for server",
-  ]) {
-    it.effect(`fails without starting a fresh thread when resume reports: ${errorMessage}`, () =>
-      Effect.gen(function* () {
-        const client = {
-          request: () => Effect.die("Resume failures must not start a fresh thread"),
-          raw: {
-            request: () =>
-              Effect.fail(
-                new CodexErrors.CodexAppServerRequestError({
-                  code: -32603,
-                  errorMessage,
-                }),
-              ),
-          },
-        };
+  it.effect("propagates non-recoverable resume failures", () =>
+    Effect.gen(function* () {
+      const client = {
+        request: () => Effect.die("Non-recoverable resume failures must not start a fresh thread"),
+        raw: {
+          request: () =>
+            Effect.fail(
+              new CodexErrors.CodexAppServerRequestError({
+                code: -32603,
+                errorMessage: "timed out waiting for server",
+              }),
+            ),
+        },
+      };
 
-        const error = yield* openCodexThread({
-          client,
-          threadId: ThreadId.make("thread-1"),
-          runtimeMode: "full-access",
-          cwd: "/tmp/project",
-          requestedModel: "gpt-5.3-codex",
-          serviceTier: undefined,
-          resumeThreadId: "stale-thread",
-        }).pipe(Effect.flip);
+      const error = yield* openCodexThread({
+        client,
+        threadId: ThreadId.make("thread-1"),
+        runtimeMode: "full-access",
+        cwd: "/tmp/project",
+        requestedModel: "gpt-5.3-codex",
+        serviceTier: undefined,
+        resumeThreadId: "stale-thread",
+      }).pipe(Effect.flip);
 
-        NodeAssert.ok(isCodexAppServerRequestError(error));
-        NodeAssert.equal(error.errorMessage, errorMessage);
-      }),
-    );
-  }
+      NodeAssert.ok(isCodexAppServerRequestError(error));
+      NodeAssert.equal(error.errorMessage, "timed out waiting for server");
+    }),
+  );
 });

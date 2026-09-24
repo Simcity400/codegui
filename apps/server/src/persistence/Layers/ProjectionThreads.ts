@@ -1,4 +1,3 @@
-import { OrchestrationThreadGoal } from "@t3tools/contracts";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 import * as SqlSchema from "effect/unstable/sql/SqlSchema";
 import * as Effect from "effect/Effect";
@@ -20,7 +19,6 @@ const ProjectionThreadDbRow = ProjectionThread.mapFields(
     modelSelection: Schema.fromJsonString(ModelSelection),
     titleState: Schema.NullOr(Schema.fromJsonString(ThreadTitleState)),
     linkedPullRequest: Schema.NullOr(Schema.fromJsonString(ThreadLinkedPullRequest)),
-    goal: Schema.NullOr(Schema.fromJsonString(OrchestrationThreadGoal)),
     branchPullRequest: Schema.NullOr(Schema.fromJsonString(ThreadLinkedPullRequest)),
   }),
 );
@@ -43,10 +41,7 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
           branch,
           worktree_path,
           linked_pull_request_json,
-          goal_json,
           branch_pull_request_json,
-          forked_from_thread_id,
-          side_chat_promoted_at,
           latest_turn_id,
           created_at,
           updated_at,
@@ -78,10 +73,7 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
           ${row.branch},
           ${row.worktreePath},
           ${row.linkedPullRequest === undefined || row.linkedPullRequest === null ? null : JSON.stringify(row.linkedPullRequest)},
-          ${row.goal == null ? null : JSON.stringify(row.goal)},
           ${row.branchPullRequest === undefined || row.branchPullRequest === null ? null : JSON.stringify(row.branchPullRequest)},
-          ${row.forkedFromThreadId ?? null},
-          ${row.sideChatPromotedAt ?? null},
           ${row.latestTurnId},
           ${row.createdAt},
           ${row.updatedAt},
@@ -113,10 +105,7 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
           branch = excluded.branch,
           worktree_path = excluded.worktree_path,
           linked_pull_request_json = excluded.linked_pull_request_json,
-          goal_json = excluded.goal_json,
           branch_pull_request_json = excluded.branch_pull_request_json,
-          forked_from_thread_id = excluded.forked_from_thread_id,
-          side_chat_promoted_at = excluded.side_chat_promoted_at,
           latest_turn_id = excluded.latest_turn_id,
           created_at = excluded.created_at,
           updated_at = excluded.updated_at,
@@ -155,10 +144,7 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
           branch,
           worktree_path AS "worktreePath",
           linked_pull_request_json AS "linkedPullRequest",
-          goal_json AS "goal",
           branch_pull_request_json AS "branchPullRequest",
-          forked_from_thread_id AS "forkedFromThreadId",
-          side_chat_promoted_at AS "sideChatPromotedAt",
           latest_turn_id AS "latestTurnId",
           created_at AS "createdAt",
           updated_at AS "updatedAt",

@@ -621,8 +621,6 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
             worktreePath: event.payload.worktreePath,
             linkedPullRequest: null,
             branchPullRequest: null,
-            forkedFromThreadId: event.payload.forkedFromThreadId ?? null,
-            sideChatPromotedAt: event.payload.sideChatPromotedAt ?? null,
             latestTurnId: null,
             createdAt: event.payload.createdAt,
             updatedAt: event.payload.updatedAt,
@@ -834,9 +832,6 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
             ...(event.payload.branchPullRequest !== undefined
               ? { branchPullRequest: event.payload.branchPullRequest }
               : {}),
-            ...(event.payload.sideChatPromotedAt !== undefined
-              ? { sideChatPromotedAt: event.payload.sideChatPromotedAt }
-              : {}),
             updatedAt: event.payload.updatedAt,
           });
           // Legacy single-link events replay into the link table. The old
@@ -1019,22 +1014,6 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
               (previousLatest === null || event.payload.createdAt > previousLatest)
                 ? event.payload.createdAt
                 : previousLatest,
-          });
-          return;
-        }
-
-        case "thread.goal-set": {
-          const existingRow = yield* projectionThreadRepository.getById({
-            threadId: event.payload.threadId,
-          });
-          if (Option.isNone(existingRow)) {
-            return;
-          }
-          // Goal bookkeeping is not user-visible thread activity: leave
-          // updatedAt alone so the list order does not churn on every turn.
-          yield* projectionThreadRepository.upsert({
-            ...existingRow.value,
-            goal: event.payload.goal,
           });
           return;
         }

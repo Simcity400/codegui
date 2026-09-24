@@ -64,7 +64,6 @@ import {
 } from "../../serverSettings.ts";
 import { resolveProjectSettings } from "@t3tools/shared/projectSettings";
 import { VcsStatusBroadcaster } from "../../vcs/VcsStatusBroadcaster.ts";
-import { withSideChatBoundary } from "../../provider/SideChatInstructions.ts";
 import { GitWorkflowService } from "../../git/GitWorkflowService.ts";
 const isProviderAdapterProcessError = Schema.is(ProviderAdapterProcessError);
 const isProviderAdapterRequestError = Schema.is(ProviderAdapterRequestError);
@@ -611,8 +610,7 @@ const make = Effect.gen(function* () {
       activeSession.providerInstanceId !== undefined
         ? activeSession.providerInstanceId
         : thread.modelSelection.instanceId;
-    const desiredModelSelection =
-      requestedModelSelection ?? threadModelSelections.get(threadId) ?? thread.modelSelection;
+    const desiredModelSelection = requestedModelSelection ?? thread.modelSelection;
     const desiredInstanceId = desiredModelSelection.instanceId;
     const currentInfo = yield* providerService.getInstanceInfo(currentInstanceId).pipe(
       Effect.mapError(
@@ -676,10 +674,14 @@ const make = Effect.gen(function* () {
                 model: activeSession.model,
               }
             : thread.modelSelection,
-        requestedModelSelection: desiredModelSelection,
+        requestedModelSelection,
       });
     }
-    if (thread.session !== null && desiredInstanceId !== currentInstanceId) {
+    if (
+      thread.session !== null &&
+      requestedModelSelection !== undefined &&
+      requestedModelSelection.instanceId !== currentInstanceId
+    ) {
       if (currentInfo.driverKind !== desiredInfo.driverKind) {
         return yield* new ProviderAdapterRequestError({
           provider: preferredProvider,
@@ -718,9 +720,6 @@ const make = Effect.gen(function* () {
           threadId,
           ...(preferredProvider ? { provider: preferredProvider } : {}),
           providerInstanceId: desiredInstanceId,
-          ...(thread.forkedFromThreadId != null
-            ? { forkFromThreadId: thread.forkedFromThreadId }
-            : {}),
           ...(effectiveCwd ? { cwd: effectiveCwd } : {}),
           ...(thread.title ? { title: thread.title } : {}),
           modelSelection: desiredModelSelection,
@@ -767,8 +766,10 @@ const make = Effect.gen(function* () {
         .sessionModelSwitch;
       const modelChanged =
         requestedModelSelection !== undefined &&
-        desiredModelSelection.model !== activeSession?.model;
-      const instanceChanged = activeSession?.providerInstanceId !== desiredInstanceId;
+        requestedModelSelection.model !== activeSession?.model;
+      const instanceChanged =
+        requestedModelSelection !== undefined &&
+        activeSession?.providerInstanceId !== requestedModelSelection.instanceId;
       const shouldRestartForModelChange = modelChanged && sessionModelSwitch === "unsupported";
       const previousModelSelection = threadModelSelections.get(threadId);
       const shouldRestartForModelSelectionChange =
@@ -1482,16 +1483,10 @@ const make = Effect.gen(function* () {
       turnsAfterCompaction.set(event.payload.threadId, queued);
       return;
     }
-    // The stored message stays the user's own words; only the provider sees
-    // the boundary, and only on the side chat's first turn.
-    const sideChatFirstTurn =
-      thread.forkedFromThreadId != null &&
-      thread.sideChatPromotedAt == null &&
-      !hasOtherUserMessages;
     const sendTurnRequest = yield* buildSendTurnRequestForThread({
       threadId: event.payload.threadId,
       messageText: projectComposerContextForProvider({
-        text: sideChatFirstTurn ? withSideChatBoundary(message.text) : message.text,
+        text: message.text,
         records: message.context?.records ?? [],
       }),
       ...(message.attachments !== undefined ? { attachments: message.attachments } : {}),
@@ -1791,9 +1786,6 @@ const make = Effect.gen(function* () {
     });
     switch (event.type) {
       case "thread.meta-updated":
-        if (event.payload.modelSelection !== undefined) {
-          threadModelSelections.set(event.payload.threadId, event.payload.modelSelection);
-        }
         if (event.payload.regenerateTitle) yield* threadTitleRegenerationWorker.enqueue(event);
         else if (event.payload.titleState?.needsRefinement)
           yield* maybeRefineThreadTitle(event.payload.threadId);
@@ -1896,8 +1888,7 @@ const make = Effect.gen(function* () {
     const processEvent = Effect.fn("processEvent")(function* (event: OrchestrationEvent) {
       if (
         (event.type === "thread.meta-updated" &&
-          (event.payload.modelSelection !== undefined ||
-            event.payload.regenerateTitle === true ||
+          (event.payload.regenerateTitle === true ||
             event.payload.titleState?.needsRefinement === true)) ||
         (event.type === "thread.session-set" && event.payload.session.status === "ready") ||
         event.type === "thread.runtime-mode-set" ||

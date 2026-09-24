@@ -40,7 +40,11 @@ import { ProviderEventLoggers } from "../Layers/ProviderEventLoggers.ts";
 import { resolveClaudeModelCatalog } from "../ClaudeModelCatalog.ts";
 import { makeManagedServerProvider } from "../makeManagedServerProvider.ts";
 import * as ModelManifest from "../ModelManifest.ts";
-import type { ProviderDriver, ProviderInstance } from "../ProviderDriver.ts";
+import {
+  defaultProviderContinuationIdentity,
+  type ProviderDriver,
+  type ProviderInstance,
+} from "../ProviderDriver.ts";
 import { withInstanceIdentity } from "./instanceIdentity.ts";
 import { mergeProviderInstanceEnvironment } from "../ProviderInstanceEnvironment.ts";
 import {
@@ -55,8 +59,7 @@ import {
   makeProviderSnapshotSettingsSource,
   type ProviderSnapshotSettings,
 } from "../providerUpdateSettings.ts";
-import { makeClaudeCapabilitiesCacheKey, resolveClaudeHomePath } from "./ClaudeHome.ts";
-import { transferClaudeSession } from "./ClaudeSessionTransfer.ts";
+import { makeClaudeCapabilitiesCacheKey, makeClaudeContinuationGroupKey } from "./ClaudeHome.ts";
 import { discoverClaudeSkills } from "./ClaudeSkills.ts";
 const decodeClaudeSettings = Schema.decodeSync(ClaudeSettings);
 
@@ -113,6 +116,10 @@ export const ClaudeDriver: ProviderDriver<ClaudeSettings, ClaudeDriverEnv> = {
       const modelManifest = yield* ModelManifest.ModelManifest;
       const modelCatalog = modelManifest.current.pipe(Effect.map(resolveClaudeModelCatalog));
       const processEnv = mergeProviderInstanceEnvironment(environment);
+      const fallbackContinuationIdentity = defaultProviderContinuationIdentity({
+        driverKind: DRIVER_KIND,
+        instanceId,
+      });
       const effectiveConfig = {
         ...config,
         enabled,
@@ -128,8 +135,10 @@ export const ClaudeDriver: ProviderDriver<ClaudeSettings, ClaudeDriverEnv> = {
           Effect.provideService(Path.Path, path),
         ),
       );
-      const stateDirectory = yield* resolveClaudeHomePath(effectiveConfig, processEnv);
-      const continuationGroupKey = "claude:local-session-transfer";
+      const continuationGroupKey = yield* makeClaudeContinuationGroupKey(
+        effectiveConfig,
+        processEnv,
+      );
       const stampIdentity = withInstanceIdentity({
         instanceId,
         driverKind: DRIVER_KIND,
@@ -245,27 +254,15 @@ export const ClaudeDriver: ProviderDriver<ClaudeSettings, ClaudeDriverEnv> = {
         instanceId,
         driverKind: DRIVER_KIND,
         continuationIdentity: {
-          driverKind: DRIVER_KIND,
+          ...fallbackContinuationIdentity,
           continuationKey: continuationGroupKey,
-          stateDirectory,
         },
         displayName,
         accentColor,
         enabled,
         snapshot,
         snapshotForCwd,
-        adapter: {
-          ...adapter,
-          transferSession: ({ source, resumeCursor }) =>
-            transferClaudeSession({
-              sourceHome: source.stateDirectory,
-              targetHome: stateDirectory,
-              resumeCursor,
-            }).pipe(
-              Effect.provideService(FileSystem.FileSystem, fileSystem),
-              Effect.provideService(Path.Path, path),
-            ),
-        },
+        adapter,
         textGeneration,
       } satisfies ProviderInstance;
     }),

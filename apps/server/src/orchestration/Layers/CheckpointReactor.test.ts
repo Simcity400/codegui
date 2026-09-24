@@ -139,8 +139,6 @@ function createProviderServiceHarness(
         },
       }),
     rollbackConversation,
-    setCodexGoal: () => Effect.die("Goal mutation is not stubbed in this test"),
-    clearCodexGoal: () => Effect.die("Goal mutation is not stubbed in this test"),
     uploadFeedback: () => unsupported(),
     get streamEvents() {
       return Stream.fromPubSub(runtimeEventPubSub);

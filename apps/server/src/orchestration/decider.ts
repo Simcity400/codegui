@@ -386,19 +386,6 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         command,
         threadId: command.threadId,
       });
-      if (command.forkedFromThreadId != null) {
-        const parentThread = yield* requireThread({
-          readModel,
-          command,
-          threadId: command.forkedFromThreadId,
-        });
-        if (parentThread.projectId !== command.projectId) {
-          return yield* new OrchestrationCommandInvariantError({
-            commandType: command.type,
-            detail: `Side chat parent '${parentThread.id}' belongs to a different project.`,
-          });
-        }
-      }
       return {
         ...(yield* withEventBase({
           aggregateKind: "thread",
@@ -417,9 +404,6 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           interactionMode: command.interactionMode,
           branch: command.branch,
           worktreePath: command.worktreePath,
-          ...(command.forkedFromThreadId !== undefined
-            ? { forkedFromThreadId: command.forkedFromThreadId, sideChatPromotedAt: null }
-            : {}),
           createdAt: command.createdAt,
           updatedAt: command.createdAt,
         },
@@ -427,34 +411,11 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
     }
 
     case "thread.delete": {
-      const thread = yield* requireThread({
+      yield* requireThread({
         readModel,
         command,
         threadId: command.threadId,
       });
-      const activeSideChats = listThreadsByProjectId(readModel, thread.projectId).filter(
-        (candidate) =>
-          candidate.deletedAt === null &&
-          candidate.forkedFromThreadId === thread.id &&
-          candidate.sideChatPromotedAt == null,
-      );
-      if (activeSideChats.length > 0) {
-        const promotedAt = yield* nowIso;
-        return yield* decideCommandSequence({
-          readModel,
-          commands: [
-            ...activeSideChats.map(
-              (sideChat): Extract<OrchestrationCommand, { type: "thread.meta.update" }> => ({
-                type: "thread.meta.update",
-                commandId: command.commandId,
-                threadId: sideChat.id,
-                sideChatPromotedAt: promotedAt,
-              }),
-            ),
-            command,
-          ],
-        });
-      }
       const occurredAt = yield* nowIso;
       return {
         ...(yield* withEventBase({
@@ -941,12 +902,6 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         command,
         threadId: command.threadId,
       });
-      if (command.sideChatPromotedAt != null && thread.forkedFromThreadId == null) {
-        return yield* new OrchestrationCommandInvariantError({
-          commandType: command.type,
-          detail: `Thread '${thread.id}' is not a side chat and cannot be promoted.`,
-        });
-      }
       // Old clients only see the derived single link. Unlink that request through
       // the same command path as modern clients, including stack dismissal, while
       // retaining other links they cannot see. Historical metadata events still replay unchanged.
@@ -1073,9 +1028,6 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           ...(command.worktreePath !== undefined ? { worktreePath: command.worktreePath } : {}),
           ...(command.linkedPullRequest !== undefined
             ? { linkedPullRequest: command.linkedPullRequest }
-            : {}),
-          ...(command.sideChatPromotedAt !== undefined
-            ? { sideChatPromotedAt: command.sideChatPromotedAt }
             : {}),
           updatedAt: occurredAt,
         },
@@ -2242,29 +2194,6 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         },
       };
       return [unsettledEvent, activityAppendedEvent];
-    }
-
-    case "thread.goal.set": {
-      yield* requireThread({
-        readModel,
-        command,
-        threadId: command.threadId,
-      });
-      // The provider's goal record is authoritative; the projection mirrors
-      // it as-is so a later snapshot can never disagree with live updates.
-      return {
-        ...(yield* withEventBase({
-          aggregateKind: "thread",
-          aggregateId: command.threadId,
-          occurredAt: command.createdAt,
-          commandId: command.commandId,
-        })),
-        type: "thread.goal-set",
-        payload: {
-          threadId: command.threadId,
-          goal: command.goal,
-        },
-      };
     }
 
     default: {

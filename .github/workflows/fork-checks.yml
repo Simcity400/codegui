@@ -73,14 +73,9 @@ jobs:
             scripts/mobile-build-budget.test.ts \
             scripts/merge-update-manifests.test.ts \
             apps/desktop/src/updates/DesktopUpdates.test.ts \
-            apps/desktop/src/updates/updateMachine.test.ts \
             apps/desktop/src/updates/windowsUpdateSelection.test.ts \
             apps/desktop/src/electron/ElectronUpdater.windows.test.ts \
             apps/server/src/provider/Layers/CodexSessionRuntime.test.ts \
-            apps/server/src/relay/AgentAwarenessRelay.test.ts \
-            apps/server/src/auth/RpcAuthorization.test.ts \
-            packages/contracts/src/codexGoal.test.ts \
-            apps/server/src/orchestration/projector.goal.test.ts \
             apps/server/src/persistence/ForkCompatibility.test.ts \
             apps/server/src/persistence/Layers/OrchestrationEventStore.test.ts \
             apps/server/src/persistence/Layers/ProjectionThreadMessages.test.ts \
@@ -88,19 +83,15 @@ jobs:
             packages/client-runtime/src/state/agentTranscripts.test.ts \
             packages/client-runtime/src/state/subagentPresentation.test.ts \
             apps/mobile/src/features/agents/agentListRows.test.ts \
-            packages/client-runtime/src/state/sideChat.test.ts \
-            packages/client-runtime/src/state/codexGoal.test.ts \
             apps/server/src/provider/Layers/CodexAdapter.test.ts \
             apps/server/src/provider/Layers/ClaudeAdapter.test.ts \
-            apps/server/src/provider/Layers/ProviderService.test.ts \
             apps/server/src/orchestration/Layers/ProviderRuntimeIngestion.test.ts \
             apps/server/src/orchestration/Layers/ProjectionPipeline.test.ts \
             apps/server/src/orchestration/Layers/ProjectionSnapshotQuery.test.ts \
-            apps/desktop/src/updates/upstreamMerge.test.ts \
-            packages/shared/src/composerTrigger.test.ts
+            apps/desktop/src/updates/upstreamMerge.test.ts
           vp test run scripts/build-desktop-artifact.test.ts -t "Windows|sidecar|ASAR"
       - name: Test web feature controls
         working-directory: apps/web
-        run: vp test run --project unit src/components/chat/useCodexGoalControls.test.tsx src/components/chat/AgentTranscript.test.ts src/components/sidebar/upstreamMerge.logic.test.ts src/components/RightPanelTabs.test.tsx
+        run: vp test run --project unit src/components/chat/AgentTranscript.test.ts src/components/sidebar/upstreamMerge.logic.test.ts
       - name: Typecheck retained feature packages
         run: vp run --filter @t3tools/contracts --filter @t3tools/client-runtime --filter @t3tools/web --filter @t3tools/mobile --filter t3 --filter @t3tools/desktop --filter @t3tools/scripts --concurrency-limit 2 typecheck

@@ -92,40 +92,10 @@ export function buildComposerSlashCommandItems(input: {
     (item) => item.command.includes(query) && (item.command === "model" || allowInteractionMode),
   );
 
-  if (
-    input.hasThread &&
-    input.atMessageStart &&
-    "side".includes(query) &&
-    (input.selectedProviderStatus?.driver === "codex" ||
-      input.selectedProviderStatus?.driver === "claudeAgent")
-  ) {
-    items.push({
-      id: "cmd:side",
-      type: "slash-command",
-      command: "side",
-      label: "/side",
-      description: "Start a side chat",
-    });
-  }
-
   // Providers expand commands only at the start of a message. T3 commands
   // change local state and do not have this restriction.
   if (!input.atMessageStart) return items;
-  if (
-    input.hasThread &&
-    input.selectedProviderStatus?.driver === "codex" &&
-    "goal".includes(query)
-  ) {
-    items.push({
-      id: "pcmd:goal",
-      type: "provider-slash-command",
-      command: { name: "goal", description: "Set or manage the Codex goal" },
-      label: "/goal",
-      description: "Set or manage the Codex goal",
-    });
-  }
   for (const command of input.selectedProviderStatus?.slashCommands ?? []) {
-    if (command.name === "goal" && input.selectedProviderStatus?.driver === "codex") continue;
     if (!command.name.toLowerCase().includes(query)) continue;
     if (command.name === "compact" && !input.hasCompactableConversation) continue;
     // T3's own limits command is answered by the thread composer; New Task has

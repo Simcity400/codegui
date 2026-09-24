@@ -4,15 +4,6 @@ For one account, use the default Codex provider with your normal Codex login.
 [Provider setup](./install.md#providers) covers installation, Settings > Providers,
 and custom binaries or environment variables.
 
-## Goals
-
-After starting a Codex conversation, send `/goal` to edit its objective and optional
-token budget, or `/goal your objective` to set it directly. The goal controls show
-status, token usage, and elapsed time on web, desktop, and mobile. Pause, resume,
-or clear the goal there, or use `/goal pause`, `/goal resume`, and `/goal clear`.
-Goals remain visible after reconnecting. Managing a stopped thread's goal resumes
-its Codex session, and resuming an active goal can continue its work.
-
 ## Use multiple accounts
 
 A shared Codex home with a shadow home lets work and personal accounts continue
@@ -48,16 +39,9 @@ from the other home.
 
 ## Switch accounts in an existing thread
 
-Choose the other account from the thread's model picker on web, desktop, or mobile. T3 Code offers compatible
+Choose the other account from the thread's model picker. T3 Code offers compatible
 Codex instances that share the thread's **CODEX_HOME path**. Changing accounts does
 not move the conversation into a separate Codex home.
-
-When an account reaches its usage limit, select another signed-in account and send
-your message again in the same thread. Its saved context is retained, including
-after the session has stopped. If the original Codex thread cannot be resumed,
-T3 Code shows an error instead of starting a new conversation.
-Two provider entries signed into the same account
-share its usage limit; changing the entry's name does not give it separate quota.
 
 If the account is missing from the picker, compare the home paths in provider
 settings. If two instances show the same unexpected account or models, check their

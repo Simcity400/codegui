@@ -1,42 +1,5 @@
-diff --git a/dist/Queue.js b/dist/Queue.js
-index ae73d48ce79a317715947abf32e137d5144e62f9..f0378c0c149b0f72a61b4bfecb414a0ed255c30b 100644
---- a/dist/Queue.js
-+++ b/dist/Queue.js
-@@ -1591,6 +1591,10 @@ const offerRemainingSingle = (self, message) => {
-     if (self.state._tag !== "Open") {
-       return resume(exitFalse);
-     }
-+    // A scheduler yield can let a consumer arrive after offer's initial check.
-+    if (offerUnsafe(self, message)) {
-+      return resume(exitTrue);
-+    }
-     const entry = {
-       _tag: "Single",
-       message,
-@@ -1609,6 +1613,10 @@ const offerRemainingArray = (self, remaining) => {
-     if (self.state._tag !== "Open") {
-       return resume(core.exitSucceed(remaining));
-     }
-+    remaining = offerAllUnsafe(self, remaining);
-+    if (remaining.length === 0) {
-+      return resume(core.exitSucceed([]));
-+    }
-     const entry = {
-       _tag: "Array",
-       remaining,
-@@ -1671,6 +1679,10 @@ const awaitTake = self => internalEffect.callback(resume => {
-   if (self.state._tag === "Done") {
-     return resume(self.state.exit);
-   }
-+  // Recheck after the scheduler gap between taking and registering a waiter.
-+  if (self.messages.length > 0 || (self.capacity <= 0 && self.state.offers.size > 0)) {
-+    return resume(internalEffect.exitVoid);
-+  }
-   self.state.takers.add(resume);
-   return internalEffect.sync(() => {
-     if (self.state._tag !== "Done") {
 diff --git a/dist/unstable/ai/McpServer.js b/dist/unstable/ai/McpServer.js
-index e8b9be465ab495cf8264d5f6b7375b7b8ea63d48..9cffc5cd63265814a8cb53042e916faf52372ac6 100644
+index e8b9be4..9cffc5c 100644
 --- a/dist/unstable/ai/McpServer.js
 +++ b/dist/unstable/ai/McpServer.js
 @@ -450,6 +450,26 @@ const runWithProtocolState = /*#__PURE__*/Effect.fnUntraced(function* (options,
@@ -76,7 +39,7 @@ index e8b9be465ab495cf8264d5f6b7375b7b8ea63d48..9cffc5cd63265814a8cb53042e916faf
  };
  const layerMcpProtocolHttp = options => Layer.effect(RpcServer.Protocol)(Effect.gen(function* () {
 diff --git a/dist/unstable/http/HttpClientResponse.js b/dist/unstable/http/HttpClientResponse.js
-index 59a2b12243df2304c5893a28f4723c673e96e5c1..ef542500492bb21203f5636fc0fd6215ce81806b 100644
+index 59a2b12..ef54250 100644
 --- a/dist/unstable/http/HttpClientResponse.js
 +++ b/dist/unstable/http/HttpClientResponse.js
 @@ -180,7 +180,7 @@ class WebHttpClientResponse extends Inspectable.Class {
@@ -89,7 +52,7 @@ index 59a2b12243df2304c5893a28f4723c673e96e5c1..ef542500492bb21203f5636fc0fd6215
    get remoteAddress() {
      return Option.none();
 diff --git a/dist/unstable/rpc/RpcClient.d.ts b/dist/unstable/rpc/RpcClient.d.ts
-index 1a471aa9f39ee9d6fbb71915d745be08eba947af..72337840e679cb594e99543536592716ff5bf723 100644
+index 1a471aa..7233784 100644
 --- a/dist/unstable/rpc/RpcClient.d.ts
 +++ b/dist/unstable/rpc/RpcClient.d.ts
 @@ -2,6 +2,7 @@ import * as Cause from "../../Cause.ts";
@@ -142,7 +105,7 @@ index 1a471aa9f39ee9d6fbb71915d745be08eba947af..72337840e679cb594e99543536592716
  /**
   * Represents optional client protocol hooks that run when a transport connects
 diff --git a/dist/unstable/rpc/RpcClient.js b/dist/unstable/rpc/RpcClient.js
-index c586c60856508c8ecc2e0476d56f748420fad53a..49886d805cb3f84f065d9b10ea8e6a4a91c8f14b 100644
+index c586c60..49886d8 100644
 --- a/dist/unstable/rpc/RpcClient.js
 +++ b/dist/unstable/rpc/RpcClient.js
 @@ -49,6 +49,7 @@ export const makeNoSerialization = /*#__PURE__*/Effect.fnUntraced(function* (gro
@@ -374,45 +337,8 @@ index c586c60856508c8ecc2e0476d56f748420fad53a..49886d805cb3f84f065d9b10ea8e6a4a
  /**
   * Represents optional client protocol hooks that run when a transport connects
   * and disconnects.
-diff --git a/src/Queue.ts b/src/Queue.ts
-index 0320738154375ddbb2fd2b4b92098e024d3b2819..134f671d764480984a9a52866776b3b9d685e414 100644
---- a/src/Queue.ts
-+++ b/src/Queue.ts
-@@ -2082,6 +2082,10 @@ const offerRemainingSingle = <A, E>(self: Enqueue<A, E>, message: A) => {
-     if (self.state._tag !== "Open") {
-       return resume(exitFalse)
-     }
-+    // A scheduler yield can let a consumer arrive after offer's initial check.
-+    if (offerUnsafe(self, message)) {
-+      return resume(exitTrue)
-+    }
-     const entry: Queue.OfferEntry<A> = { _tag: "Single", message, resume }
-     self.state.offers.add(entry)
-     return internalEffect.sync(() => {
-@@ -2097,6 +2101,10 @@ const offerRemainingArray = <A, E>(self: Enqueue<A, E>, remaining: Array<A>) =>
-     if (self.state._tag !== "Open") {
-       return resume(core.exitSucceed(remaining))
-     }
-+    remaining = offerAllUnsafe(self, remaining)
-+    if (remaining.length === 0) {
-+      return resume(core.exitSucceed([]))
-+    }
-     const entry: Queue.OfferEntry<A> = {
-       _tag: "Array",
-       remaining,
-@@ -2167,6 +2175,10 @@ const awaitTake = <A, E>(self: Dequeue<A, E>) =>
-     if (self.state._tag === "Done") {
-       return resume(self.state.exit)
-     }
-+    // Recheck after the scheduler gap between taking and registering a waiter.
-+    if (self.messages.length > 0 || (self.capacity <= 0 && self.state.offers.size > 0)) {
-+      return resume(internalEffect.exitVoid)
-+    }
-     self.state.takers.add(resume)
-     return internalEffect.sync(() => {
-       if (self.state._tag !== "Done") {
 diff --git a/src/unstable/http/HttpClientResponse.ts b/src/unstable/http/HttpClientResponse.ts
-index cbf047f4c67b40eba3653e8a575212ae7bbe168f..c7d5cc25f6c94d42e89e3b954ec4300d2dc47bcc 100644
+index cbf047f..c7d5cc2 100644
 --- a/src/unstable/http/HttpClientResponse.ts
 +++ b/src/unstable/http/HttpClientResponse.ts
 @@ -321,7 +321,7 @@ class WebHttpClientResponse extends Inspectable.Class implements HttpClientRespo

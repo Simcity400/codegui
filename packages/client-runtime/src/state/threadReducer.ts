@@ -123,12 +123,6 @@ export function applyThreadDetailEvent(
           branch: event.payload.branch,
           worktreePath: event.payload.worktreePath,
           branchPullRequest: null,
-          ...(event.payload.forkedFromThreadId != null
-            ? { forkedFromThreadId: event.payload.forkedFromThreadId }
-            : {}),
-          ...(event.payload.sideChatPromotedAt != null
-            ? { sideChatPromotedAt: event.payload.sideChatPromotedAt }
-            : {}),
           latestTurn: null,
           createdAt: event.payload.createdAt,
           updatedAt: event.payload.updatedAt,
@@ -221,12 +215,6 @@ export function applyThreadDetailEvent(
         },
       };
 
-    case "thread.goal-set":
-      return {
-        kind: "updated",
-        thread: { ...thread, goal: event.payload.goal },
-      };
-
     case "thread.pinned":
       return {
         kind: "updated",
@@ -289,9 +277,6 @@ export function applyThreadDetailEvent(
             : {}),
           ...(event.payload.activeOrderKey !== undefined
             ? { activeOrderKey: event.payload.activeOrderKey }
-            : {}),
-          ...(event.payload.sideChatPromotedAt !== undefined
-            ? { sideChatPromotedAt: event.payload.sideChatPromotedAt }
             : {}),
           updatedAt: event.payload.updatedAt,
         },

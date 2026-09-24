@@ -12,9 +12,6 @@
  * @module ProviderService
  */
 import type {
-  CodexGoal,
-  CodexGoalClearResult,
-  CodexGoalSetInput,
   ProviderInterruptTurnInput,
   ProviderInstanceId,
   ProviderRespondToRequestInput,
@@ -123,14 +120,6 @@ export interface ProviderServiceShape {
     readonly threadId: ThreadId;
     readonly numTurns: number;
   }) => Effect.Effect<void, ProviderServiceError>;
-
-  readonly setCodexGoal: (
-    input: CodexGoalSetInput,
-  ) => Effect.Effect<CodexGoal, ProviderServiceError>;
-
-  readonly clearCodexGoal: (
-    threadId: ThreadId,
-  ) => Effect.Effect<CodexGoalClearResult, ProviderServiceError>;
 
   /**
    * Upload a thread and return the provider's shareable feedback identifier.

@@ -1,4 +1,3 @@
-import { ThreadGoalSetPayload } from "@t3tools/contracts";
 import type {
   OrchestrationEvent,
   OrchestrationProject,
@@ -440,12 +439,6 @@ export function projectEvent(
             worktreePath: payload.worktreePath,
             pullRequests: [],
             branchPullRequest: null,
-            ...(payload.forkedFromThreadId != null
-              ? { forkedFromThreadId: payload.forkedFromThreadId }
-              : {}),
-            ...(payload.sideChatPromotedAt != null
-              ? { sideChatPromotedAt: payload.sideChatPromotedAt }
-              : {}),
             latestTurn: null,
             createdAt: payload.createdAt,
             updatedAt: payload.updatedAt,
@@ -642,9 +635,6 @@ export function projectEvent(
                 : {}),
               ...(payload.branchPullRequest !== undefined
                 ? { branchPullRequest: payload.branchPullRequest }
-                : {}),
-              ...(payload.sideChatPromotedAt !== undefined
-                ? { sideChatPromotedAt: payload.sideChatPromotedAt }
                 : {}),
               ...legacyLinkPatch,
               updatedAt: payload.updatedAt,
@@ -1051,16 +1041,6 @@ export function projectEvent(
             }),
           };
         }),
-      );
-
-    case "thread.goal-set":
-      return decodeForEvent(ThreadGoalSetPayload, event.payload, event.type, "payload").pipe(
-        Effect.map((payload) => ({
-          ...nextBase,
-          threads: updateThread(nextBase.threads, payload.threadId, {
-            goal: payload.goal,
-          }),
-        })),
       );
 
     case "thread.activity-appended":

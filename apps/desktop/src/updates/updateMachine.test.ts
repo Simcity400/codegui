@@ -238,7 +238,7 @@ describe("updateMachine", () => {
     expect(progress.errorContext).toBeNull();
   });
 
-  it("keeps a known update actionable after a failed recheck, until the feed withdraws it", () => {
+  it("clears release notes when checking again", () => {
     const state = reduceDesktopUpdateStateOnCheckStart(
       {
         ...createInitialDesktopUpdateState("1.0.0", runtimeInfo, "nightly"),
@@ -251,21 +251,7 @@ describe("updateMachine", () => {
       "2026-03-04T00:00:00.000Z",
     );
 
-    const failed = reduceDesktopUpdateStateOnCheckFailure(
-      state,
-      "network unavailable",
-      "2026-03-04T00:00:01.000Z",
-    );
-    expect(failed.status).toBe("available");
-    expect(failed.availableVersion).toBe("1.1.0-nightly.1");
-    expect(failed.releaseNotes).toEqual([
-      { version: "1.1.0-nightly.1", items: ["feat: old note"], totalItems: 1 },
-    ]);
-    expect(failed.omittedReleaseCount).toBe(2);
-    expect(failed.errorContext).toBe("check");
-    const withdrawn = reduceDesktopUpdateStateOnNoUpdate(failed, "2026-03-04T00:00:02.000Z");
-    expect(withdrawn.status).toBe("up-to-date");
-    expect(withdrawn.availableVersion).toBeNull();
-    expect(withdrawn.releaseNotes).toEqual([]);
+    expect(state.releaseNotes).toEqual([]);
+    expect(state.omittedReleaseCount).toBe(0);
   });
 });

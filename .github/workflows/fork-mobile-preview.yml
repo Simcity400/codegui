@@ -84,7 +84,7 @@ jobs:
       - name: Check mobile features
         run: |
           vp run --filter @t3tools/mobile typecheck
-          vp test run scripts/mobile-build-budget.test.ts apps/mobile/src/features/threads/use-composer-command-menu.test.ts packages/client-runtime/src/state/subagentRuntime.test.ts packages/client-runtime/src/state/codexGoal.test.ts
+          vp test run scripts/mobile-build-budget.test.ts packages/client-runtime/src/state/subagentRuntime.test.ts
 
       - name: Expose pnpm
         run: |

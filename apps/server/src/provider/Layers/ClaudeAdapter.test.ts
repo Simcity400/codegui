@@ -59,8 +59,6 @@ class ClaudeAdapter extends Context.Service<ClaudeAdapter, ClaudeAdapterShape>()
 ) {}
 
 class FakeClaudeQuery implements AsyncIterable<SDKMessage> {
-  return = (): Promise<IteratorResult<SDKMessage, void>> =>
-    Promise.resolve({ done: true, value: undefined });
   private readonly queue: Array<SDKMessage> = [];
   private readonly waiters: Array<{
     readonly resolve: (value: IteratorResult<SDKMessage>) => void;
@@ -2999,11 +2997,7 @@ describe("ClaudeAdapterLive", () => {
         assert(completed?.type === "turn.completed");
         const actualQuery = harness.getLastCreateQueryInput();
         assert(actualQuery !== undefined);
-        const expectedConfigDir = homePath
-          ? NodePath.resolve(homePath)
-          : inherited
-            ? NodePath.resolve(inherited)
-            : undefined;
+        const expectedConfigDir = homePath ? NodePath.resolve(homePath) : inherited;
         assert.equal(actualQuery.options.env?.CLAUDE_CONFIG_DIR, expectedConfigDir);
         assert.equal(actualQuery.options.cwd, cwd);
         assert(
@@ -4305,27 +4299,6 @@ describe("ClaudeAdapterLive", () => {
       Effect.provideService(Random.Random, makeDeterministicRandomService()),
       Effect.provide(layer),
     );
-  });
-
-  it.effect("waits for SDK transcript cleanup before completing session stop", () => {
-    const harness = makeHarness();
-    return Effect.gen(function* () {
-      const adapter = yield* ClaudeAdapter;
-      const cleanupStarted = Promise.withResolvers<void>();
-      const releaseCleanup = Promise.withResolvers<void>();
-      harness.query.return = async () => {
-        cleanupStarted.resolve();
-        await releaseCleanup.promise;
-        return { done: true, value: undefined };
-      };
-      yield* adapter.startSession({ threadId: THREAD_ID, runtimeMode: "full-access" });
-      const stop = yield* adapter.stopSession(THREAD_ID).pipe(Effect.forkChild);
-      yield* Effect.promise(() => cleanupStarted.promise);
-      assert.equal(stop.pollUnsafe(), undefined);
-      releaseCleanup.resolve();
-      yield* Fiber.join(stop);
-      assert.equal(yield* adapter.hasSession(THREAD_ID), false);
-    }).pipe(Effect.provide(harness.layer));
   });
 
   it.effect("stopSession does not throw into the SDK prompt consumer", () => {
@@ -6483,35 +6456,6 @@ describe("ClaudeAdapterLive", () => {
       assert.equal(createInput?.options.resume, "550e8400-e29b-41d4-a716-446655440000");
       assert.equal(createInput?.options.sessionId, undefined);
       assert.equal(createInput?.options.resumeSessionAt, undefined);
-    }).pipe(
-      Effect.provideService(Random.Random, makeDeterministicRandomService()),
-      Effect.provide(harness.layer),
-    );
-  });
-
-  it.effect("forks a resumed Claude session into a new durable session id", () => {
-    const harness = makeHarness();
-    return Effect.gen(function* () {
-      const adapter = yield* ClaudeAdapter;
-      const parentSessionId = "550e8400-e29b-41d4-a716-446655440000";
-
-      const session = yield* adapter.startSession({
-        threadId: RESUME_THREAD_ID,
-        provider: ProviderDriverKind.make("claudeAgent"),
-        resumeCursor: { resume: parentSessionId, turnCount: 3 },
-        forkFromThreadId: ThreadId.make("parent-thread"),
-        runtimeMode: "full-access",
-      });
-
-      const createInput = harness.getLastCreateQueryInput();
-      assert.equal(createInput?.options.resume, parentSessionId);
-      assert.equal(createInput?.options.forkSession, true);
-      assert.equal(typeof createInput?.options.sessionId, "string");
-      assert.notEqual(createInput?.options.sessionId, parentSessionId);
-      assert.equal(
-        (session.resumeCursor as { resume?: string } | undefined)?.resume,
-        createInput?.options.sessionId,
-      );
     }).pipe(
       Effect.provideService(Random.Random, makeDeterministicRandomService()),
       Effect.provide(harness.layer),
