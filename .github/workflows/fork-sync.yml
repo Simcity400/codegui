@@ -17,7 +17,8 @@ concurrency:
 jobs:
   gate:
     name: Check published nightlies and missing builds
-    if: github.repository == 'Simcity400/t3code-personal'
+    # Stable across personal repository renames.
+    if: github.repository_id == '1316734485'
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     outputs:

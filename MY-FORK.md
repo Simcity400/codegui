@@ -13,7 +13,7 @@ removed features, without taking over upstream's migration numbering.
 
 ## Windows updates
 
-[Releases](https://github.com/Simcity400/t3code-personal/releases) contains unsigned
+[Releases](https://github.com/Simcity400/codegui/releases) contains unsigned
 **T3 Code (Nightly)** installers. Install the version for your machine, then use the
 app's normal update controls. Updates select the native Windows CPU architecture,
 including ARM64 when an older installation runs under x64 emulation.
