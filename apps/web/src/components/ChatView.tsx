@@ -223,14 +223,7 @@ import { useDeviceState } from "~/state/device";
 import { DeviceSetup } from "./device/DeviceSetup";
 import { Dialog } from "./ui/dialog";
 import { WizardPopup } from "./ui/wizard";
-import {
-  deriveAgentPanelModel,
-  foldSubagentActivities,
-  foldThreadTasks,
-} from "@t3tools/client-runtime/state/subagentRuntime";
-import { isSubagentSessionLive } from "@t3tools/client-runtime/state/subagentPresentation";
-import { ScopedAgentTranscript } from "./chat/AgentTranscript";
-import { isAgentMessage } from "@t3tools/client-runtime/state/agent-transcripts";
+import { ChatAgentTranscript, useAgentPanelModel, useParentMessages } from "./chat/forkSubagents";
 import { BranchToolbar, type BranchToolbarHandle } from "./BranchToolbar";
 import { resolveShortcutCommand, shortcutLabelForCommand } from "../keybindings";
 import { isEditableFocused } from "../lib/editableFocus";
@@ -2924,12 +2917,7 @@ export default function ChatView(props: ChatViewProps) {
   // Agents surface, live strip, and workflow cards. v2Projection is null
   // until orchestration-v2 lands (source precedence lives in the derive).
   // sessionLive derives interruption for agents orphaned by session death.
-  const agentSessionLive = isSubagentSessionLive(activeThread?.session);
-  const agentPanelModel = useMemo(
-    () =>
-      deriveAgentPanelModel(foldThreadTasks(threadActivities, { sessionLive: agentSessionLive })),
-    [agentSessionLive, threadActivities],
-  );
+  const agentPanelModel = useAgentPanelModel(activeThread?.session, threadActivities);
   const { approvals: pendingApprovals, userInputs: pendingUserInputs } = useMemo(
     () => derivePendingRequests(threadActivities),
     [threadActivities],
@@ -3328,10 +3316,7 @@ export default function ChatView(props: ChatViewProps) {
       return next;
     });
   }, []);
-  const serverMessages = useMemo(
-    () => activeThread?.messages.filter((message) => !isAgentMessage(message)),
-    [activeThread?.messages],
-  );
+  const serverMessages = useParentMessages(activeThread?.messages);
   const [projectServerMessagePreviews] = useState(createMessageAttachmentPreviewProjector);
   const [projectHandoffMessagePreviews] = useState(createMessageAttachmentPreviewProjector);
   const downloadFileAttachment = useCallback(
@@ -9710,25 +9695,19 @@ export default function ChatView(props: ChatViewProps) {
         threadId={activeThreadRef?.threadId ?? null}
         loadEarlier={loadEarlierTurns}
         renderTranscript={(agent, { openRoster }) => (
-          <ScopedAgentTranscript
+          <ChatAgentTranscript
             key={agent.id}
             agent={agent}
-            environmentId={activeThreadRef.environmentId}
-            threadId={activeThreadRef.threadId}
+            threadRef={activeThreadRef}
             agentPanelModel={agentPanelModel}
             onOpenAgents={openRoster}
             routeThreadKey={routeThreadKey}
-            activeThreadEnvironmentId={activeThreadRef.environmentId}
-            markdownCwd={gitCwd ?? undefined}
+            cwd={gitCwd}
+            providerStatus={activeProviderStatus}
             resolvedTheme={resolvedTheme}
             timestampFormat={timestampFormat}
             workspaceRoot={activeWorkspaceRoot ?? undefined}
             onUseArtifactTemplate={useArtifactTemplate}
-            skills={
-              activeProviderStatus
-                ? resolveProviderSkillsForCwd(activeProviderStatus, gitCwd)
-                : EMPTY_PROVIDER_SKILLS
-            }
             onImageExpand={onExpandTimelineImage}
             onFileOpen={openFileAttachment}
             onFileDownload={downloadFileAttachment}
