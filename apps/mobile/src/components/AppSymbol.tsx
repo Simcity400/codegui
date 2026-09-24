@@ -86,6 +86,7 @@ import IconPlayerStopFilled from "@tabler/icons-react-native/IconPlayerStopFille
 import IconPlus from "@tabler/icons-react-native/IconPlus";
 import IconQrcode from "@tabler/icons-react-native/IconQrcode";
 import IconRefresh from "@tabler/icons-react-native/IconRefresh";
+import IconRobot from "@tabler/icons-react-native/IconRobot";
 import IconSearch from "@tabler/icons-react-native/IconSearch";
 import IconServer from "@tabler/icons-react-native/IconServer";
 import IconSettings from "@tabler/icons-react-native/IconSettings";
@@ -247,6 +248,7 @@ const ANDROID_ICON_BY_MATERIAL_NAME = {
   public: IconWorld,
   remove: IconMinus,
   smartphone: IconDeviceMobile,
+  smart_toy: IconRobot,
   terminal: IconTerminal2,
   visibility: IconEye,
 } satisfies Partial<Record<AndroidSymbol, Icon>>;

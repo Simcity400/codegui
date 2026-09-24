@@ -1,6 +1,7 @@
 import { StackActions, useNavigation } from "@react-navigation/native";
 import { HeaderBackContext } from "@react-navigation/elements";
 import { useContext, useMemo } from "react";
+import type { ImageSourcePropType } from "react-native";
 import type { AppNativeStackNavigationOptions } from "../../native/StackHeader";
 import { useAdaptiveWorkspaceLayout } from "../layout/AdaptiveWorkspaceLayout";
 import { withNativeGlassHeaderItem } from "../layout/native-glass-header-items";
@@ -12,6 +13,9 @@ import {
 
 type NativeHeaderItems = ReadonlyArray<Record<string, unknown>>;
 
+// The desktop Agents glyph as a template image: SF Symbols has no equivalent.
+const AGENTS_HEADER_ICON: ImageSourcePropType = require("../../../assets/icons/agents.png");
+
 export function useThreadHeaderOptions(props: {
   readonly title: string;
   readonly subtitle: string;
@@ -19,11 +23,24 @@ export function useThreadHeaderOptions(props: {
   readonly usesNativeHeaderGlass: boolean;
   readonly gitControls: Parameters<typeof ThreadGitControls>[0];
   readonly onReturnToThread?: () => void;
+  readonly onOpenAgents: () => void;
 }) {
   const navigation = useNavigation();
   const { layout, panes, togglePrimarySidebar } = useAdaptiveWorkspaceLayout();
   const threadCenterHeaderItems = useThreadGitCenterHeaderItems(props.gitControls);
   const compactRightHeaderItems = useThreadGitRightHeaderItems(props.gitControls);
+  const agentsHeaderItem = useMemo(
+    () =>
+      withNativeGlassHeaderItem({
+        accessibilityLabel: "Open agents",
+        icon: { templateSource: AGENTS_HEADER_ICON, type: "templateSource" as const },
+        identifier: "thread-right-agents",
+        label: "Agents",
+        onPress: props.onOpenAgents,
+        type: "button" as const,
+      }),
+    [props.onOpenAgents],
+  );
   const splitLeftHeaderItems = useMemo<NativeHeaderItems>(
     () => [
       {
@@ -108,8 +125,10 @@ export function useThreadHeaderOptions(props: {
     // Search lives in the persistent sidebar, so the split header keeps
     // the git controls on the RIGHT (no center items — center space is
     // reserved for future breadcrumbs/status).
-    unstable_headerRightItems: () =>
-      layout.usesSplitView ? threadCenterHeaderItems : compactRightHeaderItems,
+    unstable_headerRightItems: () => [
+      ...(layout.usesSplitView ? threadCenterHeaderItems : compactRightHeaderItems),
+      agentsHeaderItem,
+    ],
     unstable_headerSubtitle: props.usesNativeHeaderGlass ? props.subtitle : undefined,
     contentStyle: undefined,
   };

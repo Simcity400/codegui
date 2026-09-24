@@ -137,8 +137,14 @@ function ThreadHeader(
       icon: "point.topleft.down.curvedto.point.bottomright.up",
       onPress: props.onOpenGitInspector,
     });
+    actions.push({
+      accessibilityLabel: "Open agents",
+      icon: { ios: "cpu", android: "smart_toy" },
+      onPress: props.onOpenAgents,
+    });
     return actions;
   }, [
+    props.onOpenAgents,
     props.inspectorMode,
     panes.auxiliaryPaneVisible,
     props.onOpenFilesInspector,
@@ -499,6 +505,13 @@ function ThreadRouteContent(
     setInspectorSelection({ routeThreadIdentity, mode: "git" });
     showAuxiliaryPane("inspector");
   }, [fileInspector.supported, navigation, routeThreadIdentity, selectedThread, showAuxiliaryPane]);
+  const handleOpenAgents = useCallback(() => {
+    if (selectedThread === null) return;
+    navigation.navigate("ThreadAgents", {
+      environmentId: String(selectedThread.environmentId),
+      threadId: String(selectedThread.id),
+    });
+  }, [navigation, selectedThread]);
   const handleOpenFilesInspector = useCallback(() => {
     if (selectedThread === null || selectedThreadCwd === null) {
       return;
@@ -1054,6 +1067,7 @@ function ThreadRouteContent(
         onToggleInspector={handleToggleInspector}
         onOpenGitInspector={handleOpenGitInspector}
         onOpenFilesInspector={handleOpenFilesInspector}
+        onOpenAgents={handleOpenAgents}
         onReturnToThread={props.onReturnToThread}
       />
 
