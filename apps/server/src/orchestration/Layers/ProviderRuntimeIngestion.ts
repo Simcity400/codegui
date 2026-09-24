@@ -56,6 +56,7 @@ import { forkParked } from "../../serverActivation.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
 import { resolveProjectSettings } from "@t3tools/shared/projectSettings";
 import { canReplaceThreadTitle } from "../threadTitles.ts";
+import { makeAgentTranscriptIngestion, sessionResetActivity } from "./AgentTranscriptIngestion.ts";
 
 const providerTurnKey = (threadId: ThreadId, turnId: TurnId) => `${threadId}:${turnId}`;
 // Suffixed, not prefixed: `clearTurnStateForSession` sweeps by thread prefix.
@@ -477,30 +478,9 @@ export function runtimeEventToActivities(
       ? { sequence: eventWithSequence.sessionSequence }
       : {};
   })();
+  const sessionReset = sessionResetActivity(event, maybeSequence);
+  if (sessionReset) return [sessionReset];
   switch (event.type) {
-    case "session.state.changed":
-    case "session.exited": {
-      if (
-        event.type === "session.state.changed" &&
-        event.payload.state !== "starting" &&
-        event.payload.state !== "error" &&
-        event.payload.state !== "stopped"
-      ) {
-        return [];
-      }
-      return [
-        {
-          id: event.eventId,
-          createdAt: event.createdAt,
-          tone: "info",
-          kind: "session.reset",
-          summary: "Provider session changed",
-          payload: { timelineBypass: true },
-          turnId: null,
-          ...maybeSequence,
-        },
-      ];
-    }
     case "request.opened": {
       if (event.payload.requestType === "tool_user_input") {
         return [];
@@ -800,6 +780,9 @@ export function runtimeEventToActivities(
               ? { detail: truncateDetail(event.payload.description) }
               : {}),
             ...(event.payload.endedAt ? { endedAt: event.payload.endedAt } : {}),
+            ...(event.payload.isBackgrounded !== undefined
+              ? { isBackgrounded: event.payload.isBackgrounded }
+              : {}),
             ...taskLinkageActivityFields(event.payload as Record<string, unknown>),
           },
           turnId: toTurnId(event.turnId) ?? null,
@@ -1059,29 +1042,6 @@ const make = Effect.gen(function* () {
     capacity: TURN_MESSAGE_IDS_BY_TURN_CACHE_CAPACITY,
     timeToLive: TURN_MESSAGE_IDS_BY_TURN_TTL,
     lookup: () => Effect.succeed(new Set<MessageId>()),
-  });
-
-  // Children can outlive the parent turn and may stop without item/completed.
-  const pendingAgentMessages = yield* Cache.make<
-    ThreadId,
-    ReadonlyMap<MessageId, { agentId: string; turnId: TurnId | undefined }>
-  >({
-    capacity: TURN_MESSAGE_IDS_BY_TURN_CACHE_CAPACITY,
-    timeToLive: TURN_MESSAGE_IDS_BY_TURN_TTL,
-    lookup: () => Effect.succeed(new Map()),
-  });
-
-  const forgetAgentMessage = Effect.fnUntraced(function* (
-    threadId: ThreadId,
-    messageId: MessageId,
-  ) {
-    const pending = new Map(yield* Cache.get(pendingAgentMessages, threadId));
-    pending.delete(messageId);
-    if (pending.size === 0) {
-      yield* Cache.invalidate(pendingAgentMessages, threadId);
-    } else {
-      yield* Cache.set(pendingAgentMessages, threadId, pending);
-    }
   });
 
   const bufferedAssistantTextByMessageId = yield* Cache.make<MessageId, string>({
@@ -1569,28 +1529,13 @@ const make = Effect.gen(function* () {
       yield* clearAssistantMessageState(input.messageId);
     });
 
-  const finalizeAgentMessages = Effect.fnUntraced(function* (
-    event: ProviderRuntimeEvent,
-    agentId?: string,
-  ) {
-    const pending = yield* Cache.getOption(pendingAgentMessages, event.threadId);
-    if (Option.isNone(pending)) return;
-    for (const [messageId, owner] of pending.value) {
-      if (agentId !== undefined && owner.agentId !== agentId) continue;
-      const existing = yield* getThreadMessageById(event.threadId, messageId);
-      yield* finalizeAssistantMessage({
-        event,
-        threadId: event.threadId,
-        messageId,
-        agentId: owner.agentId,
-        ...(owner.turnId ? { turnId: owner.turnId } : {}),
-        createdAt: event.createdAt,
-        commandTag: "agent-stopped-complete",
-        finalDeltaCommandTag: "agent-stopped-final-delta",
-        hasProjectedMessage: existing !== undefined,
-      });
-      yield* forgetAgentMessage(event.threadId, messageId);
-    }
+  const agentTranscripts = yield* makeAgentTranscriptIngestion({
+    providerCommandId,
+    getThreadMessageById,
+    resolveResponseStreamingMode,
+    appendBufferedAssistantText,
+    finalizeAssistantMessage,
+    runtimeEventToActivities,
   });
 
   const finalizeActiveSegmentForTurn = (input: {
@@ -1839,104 +1784,7 @@ const make = Effect.gen(function* () {
 
       const thread = yield* resolveThreadRuntimeContext(event.threadId);
       if (!thread) return;
-
-      if (
-        (event.type === "content.delta" ||
-          event.type === "item.started" ||
-          event.type === "item.updated" ||
-          event.type === "item.completed") &&
-        event.payload.agentId
-      ) {
-        // Child messages use their own item identity and never touch the root's
-        // active text/reasoning segment, turn state, or completion bookkeeping.
-        const agentId = event.payload.agentId;
-        const messageId = MessageId.make(
-          `agent:${agentId}:assistant:${event.itemId ?? event.eventId}`,
-        );
-        const turnId = toTurnId(event.turnId);
-        if (event.type === "content.delta" && event.payload.streamKind === "assistant_text") {
-          const pending = new Map(yield* Cache.get(pendingAgentMessages, thread.id));
-          if (!pending.has(messageId)) {
-            pending.set(messageId, { agentId, turnId });
-            yield* Cache.set(pendingAgentMessages, thread.id, pending);
-          }
-          const mode = yield* resolveResponseStreamingMode(thread.projectId);
-          const delta =
-            mode === "token"
-              ? event.payload.delta
-              : yield* appendBufferedAssistantText(
-                  messageId,
-                  event.payload.delta,
-                  mode,
-                  yield* Clock.currentTimeMillis,
-                );
-          if (delta.length > 0) {
-            yield* orchestrationEngine.dispatch({
-              type: "thread.message.assistant.delta",
-              commandId: yield* providerCommandId(event, "agent-assistant-delta"),
-              threadId: thread.id,
-              messageId,
-              agentId,
-              delta,
-              ...(turnId ? { turnId } : {}),
-              createdAt: event.createdAt,
-            });
-          }
-        } else if (
-          event.type === "item.completed" &&
-          event.payload.itemType === "assistant_message"
-        ) {
-          const existing = yield* getThreadMessageById(thread.id, messageId);
-          // A repeated completion must not append the snapshot twice.
-          if (existing?.isStreaming !== false) {
-            yield* finalizeAssistantMessage({
-              event,
-              threadId: thread.id,
-              messageId,
-              agentId,
-              ...(turnId ? { turnId } : {}),
-              createdAt: event.createdAt,
-              commandTag: "agent-assistant-complete",
-              finalDeltaCommandTag: "agent-assistant-final-delta",
-              hasProjectedMessage: existing !== undefined,
-              ...((existing === undefined || existing.text.length === 0) &&
-              event.payload.detail !== undefined
-                ? { fallbackText: event.payload.detail }
-                : {}),
-            });
-          }
-          yield* forgetAgentMessage(thread.id, messageId);
-        }
-        yield* Effect.forEach(runtimeEventToActivities(event), (activity) =>
-          Effect.gen(function* () {
-            yield* orchestrationEngine.dispatch({
-              type: "thread.activity.append",
-              commandId: yield* providerCommandId(event, "agent-activity-append"),
-              threadId: thread.id,
-              activity,
-              createdAt: activity.createdAt,
-            });
-          }),
-        );
-        return;
-      }
-
-      if (event.type === "session.exited") {
-        yield* finalizeAgentMessages(event);
-      } else if (
-        event.provider === "codex" &&
-        (event.type === "task.completed" ||
-          ((event.type === "task.updated" || event.type === "task.progress") &&
-            (event.payload.status === "idle" ||
-              event.payload.status === "completed" ||
-              event.payload.status === "interrupted" ||
-              event.payload.status === "cancelled" ||
-              event.payload.status === "failed")))
-      ) {
-        // Codex's task represents the child itself. Task linkage's agentId
-        // instead describes the agent owning a task for other providers.
-        yield* finalizeAgentMessages(event, event.payload.taskId);
-      }
+      if (yield* agentTranscripts.ingest(event, thread)) return;
 
       const now = event.createdAt;
       const eventTurnId = toTurnId(event.turnId);

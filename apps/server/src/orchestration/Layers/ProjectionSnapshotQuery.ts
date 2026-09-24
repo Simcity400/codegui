@@ -71,6 +71,7 @@ import {
 import { projectActivityPayload } from "../ActivityPayloadProjection.ts";
 import * as RepositoryIdentityResolver from "../../project/RepositoryIdentityResolver.ts";
 import { ORCHESTRATION_PROJECTOR_NAMES } from "./ProjectionPipeline.ts";
+import { makeLiveTaskActivityPins, PinnedActivityLookupInput } from "./LiveTaskActivityPins.ts";
 import {
   ProjectionSnapshotQuery,
   type ProjectionEventReplayStats,
@@ -96,9 +97,6 @@ const decodeAgentSessionImportSource = Schema.decodeUnknownOption(AgentSessionIm
 // activity window. Applying the limit in SQL avoids decoding an unbounded
 // payload_json set before the projector can enforce that invariant.
 const THREAD_DETAIL_ACTIVITY_LIMIT = 500;
-// Newest live tasks whose lifecycle rows every thread-detail page carries,
-// matching the client roster cap.
-const PINNED_LIVE_TASK_LIMIT = 100;
 // Snapshot payloads are decoded and projected in small sequential batches so
 // one client read does not retain the raw payloads for the full activity window.
 const THREAD_DETAIL_ACTIVITY_PAYLOAD_BATCH_SIZE = 25;
@@ -213,10 +211,6 @@ const ProjectionImportedAgentSessionSourcesRowSchema = Schema.Struct({
 });
 const ThreadIdLookupInput = Schema.Struct({
   threadId: ThreadId,
-});
-const PinnedActivityLookupInput = Schema.Struct({
-  threadId: ThreadId,
-  includeLiveTasks: Schema.Boolean,
 });
 const TurnStartMessageLookupInput = Schema.Struct({
   threadId: ThreadId,
@@ -1825,16 +1819,14 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
       `,
   });
 
+  const liveTaskPins = makeLiveTaskActivityPins({
+    sql,
+    getThreadSessionRowByThread,
+    toPersistenceSqlOrDecodeError,
+  });
+
   const pinnedThreadActivityIdsCte = (threadId: string, includeLiveTasks: boolean) => sql`
-        latest_session_reset AS (
-          SELECT activity_id, sequence, created_at
-          FROM projection_thread_activities
-          WHERE thread_id = ${threadId}
-            AND kind IN ('session.reset', 'runtime.error')
-          ORDER BY sequence DESC, created_at DESC, activity_id DESC
-          LIMIT 1
-        ),
-        pending_approval_requests AS (
+pending_approval_requests AS (
           SELECT request_id, thread_id
           FROM projection_pending_approvals
           WHERE thread_id = ${threadId}
@@ -1888,10 +1880,8 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
             )
             AND json_extract(activity.payload_json, '$.requestId') IS NOT NULL
         ),
-        ${includeLiveTasks ? liveTaskPinCtes(threadId) : sql``}
+        ${liveTaskPins.ctes(threadId, includeLiveTasks)}
         pinned_activity_ids AS (
-          SELECT activity_id FROM latest_session_reset
-          UNION ALL
           SELECT activity_id
           FROM pending_approval_activities
           WHERE request_order = 1
@@ -1900,113 +1890,13 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           FROM user_input_lifecycle
           WHERE request_order = 1
             AND kind = 'user-input.requested'
-          ${includeLiveTasks ? sql`UNION ALL SELECT activity_id FROM live_task_activity_ids` : sql``}
+          ${liveTaskPins.pinnedIds(includeLiveTasks)}
         )
   `;
 
-  // Live-task pinning is a generous superset of what the client fold calls
-  // live (the client alone decides the status it shows; an extra pinned row
-  // costs bytes, never correctness): only status-bearing rows vote —
-  // task.started opens, task.completed and status-carrying task.updated close
-  // — because the stable-id progress/usage upserts keep landing after a task
-  // settled and would otherwise read as "still running" forever. Ties on
-  // equal keys prefer the settled vote. Members of a live workflow ride along
-  // through parentAgentId since their lifecycle is progress-only. Newest live
-  // tasks first, capped.
-  const liveTaskPinCtes = (threadId: string) => sql`
-        task_lifecycle AS MATERIALIZED (
-          SELECT
-            activity_id,
-            kind,
-            sequence,
-            created_at,
-            json_extract(payload_json, '$.taskId') AS task_id,
-            json_extract(payload_json, '$.parentAgentId') AS parent_agent_id,
-            json_extract(payload_json, '$.status') AS status
-          FROM projection_thread_activities
-          WHERE thread_id = ${threadId}
-            AND kind IN ('task.started', 'task.progress', 'task.updated', 'task.completed')
-            AND json_extract(payload_json, '$.taskId') IS NOT NULL
-        ),
-        task_status_votes AS (
-          SELECT
-            task_id,
-            sequence,
-            created_at,
-            activity_id,
-            CASE
-              WHEN kind = 'task.completed'
-                OR status IN ('completed', 'failed', 'cancelled', 'interrupted', 'stopped', 'idle')
-              THEN 1
-              ELSE 0
-            END AS settled
-          FROM task_lifecycle
-          WHERE kind = 'task.started'
-            OR kind = 'task.completed'
-            OR (kind = 'task.updated' AND status IS NOT NULL)
-        ),
-        task_latest_vote AS (
-          SELECT
-            task_id,
-            settled,
-            sequence,
-            created_at,
-            activity_id,
-            ROW_NUMBER() OVER (
-              PARTITION BY task_id
-              ORDER BY sequence DESC, created_at DESC, settled DESC, activity_id DESC
-            ) AS vote_order
-          FROM task_status_votes
-          WHERE created_at >= COALESCE((SELECT created_at FROM latest_session_reset), '')
-            AND (
-              sequence IS NULL
-              OR (SELECT sequence FROM latest_session_reset) IS NULL
-              OR sequence > (SELECT sequence FROM latest_session_reset)
-            )
-        ),
-        live_task_ids AS (
-          SELECT task_id
-          FROM task_latest_vote
-          WHERE vote_order = 1
-            AND settled = 0
-          ORDER BY sequence DESC, created_at DESC, activity_id DESC
-          LIMIT ${PINNED_LIVE_TASK_LIMIT}
-        ),
-        live_task_activity_ids AS (
-          SELECT activity_id
-          FROM task_lifecycle
-          WHERE task_id IN (SELECT task_id FROM live_task_ids)
-            OR parent_agent_id IN (SELECT task_id FROM live_task_ids)
-        ),
-  `;
-
-  const DEAD_SESSION_STATUSES: ReadonlySet<string> = new Set(["stopped", "interrupted", "error"]);
-
-  // Pinning only pays off on reads of a thread whose provider session can
-  // still finish work: a dead session's tasks render interrupted on the
-  // client regardless, and skipping the task scan keeps stopped threads
-  // (often the largest) at the plain windowed cost.
-  const shouldPinLiveTasks = (threadId: ThreadId) =>
-    getThreadSessionRowByThread({ threadId }).pipe(
-      Effect.mapError(
-        toPersistenceSqlOrDecodeError(
-          "ProjectionSnapshotQuery.getThreadDetailById:getSessionForPinning:query",
-          "ProjectionSnapshotQuery.getThreadDetailById:getSessionForPinning:decodeRow",
-        ),
-      ),
-      Effect.map(
-        (session) => Option.isSome(session) && !DEAD_SESSION_STATUSES.has(session.value.status),
-      ),
-    );
-
   // Blocking request payloads must remain available even if they predate the
-  // recent activity window: each request CTE returns at most one unresolved
-  // row. Task rows for work that is still running are pinned the same way so
-  // the Agents surface shows every live subagent and background task on the
-  // first page, however many turns ago it was launched (settled and idle
-  // tasks load with their turn's page). Bounded by the newest
-  // PINNED_LIVE_TASK_LIMIT live tasks times their handful of lifecycle rows;
-  // includeLiveTasks comes from shouldPinLiveTasks.
+  // recent activity window. Each CTE returns at most one unresolved row per
+  // request, so the merge below stays bounded by actionable work.
   const listPinnedThreadActivityRowsByThread = SqlSchema.findAll({
     Request: PinnedActivityLookupInput,
     Result: ProjectionThreadActivityDbRowSchema,
@@ -3469,7 +3359,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
   const listProjectedThreadActivities = Effect.fn(
     "ProjectionSnapshotQuery.listProjectedThreadActivities",
   )(function* (threadId: ThreadId, bounds: ThreadDetailBounds | undefined) {
-    const includeLiveTasks = yield* shouldPinLiveTasks(threadId);
+    const includeLiveTasks = yield* liveTaskPins.shouldPinLiveTasks(threadId);
     const [activityIdRows, pinnedActivityIdRows] = yield* Effect.all([
       (bounds === undefined
         ? listThreadActivityIdsByThread({ threadId })
@@ -3532,7 +3422,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
     activityRead: ThreadDetailActivityRead = { mode: "raw" },
   ) =>
     Effect.gen(function* () {
-      const includeLiveTasks = yield* shouldPinLiveTasks(threadId);
+      const includeLiveTasks = yield* liveTaskPins.shouldPinLiveTasks(threadId);
       const activitiesEffect =
         activityRead.mode === "client"
           ? listProjectedThreadActivities(threadId, bounds)
