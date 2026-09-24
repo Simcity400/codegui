@@ -32,9 +32,10 @@ and valid iOS preview signing credentials in EAS.
 Changes publish to the `preview` branch. The pipeline compares native fingerprints:
 compatible changes ship over the air; native changes require installing the new
 preview build from EAS. Native builds wait at least three days between attempts
-and stop at 12 iPhone build attempts in a rolling 31-day window. The count includes
-all profiles and outcomes in this Expo project, reserving three of the free plan's
-15 slots. Builds in other Expo projects are outside this guard.
+and stop when the `simcity400` account has used its iPhone builds for the current
+Expo billing period (15 on the free plan), so they never incur overage. If the
+token cannot read account usage, a stricter fallback applies: 12 attempts of any
+outcome in a rolling 31-day window.
 
 A daily check retries deferred native changes from the latest `main`; Windows
 releases and compatible over-the-air updates continue independently. While a native

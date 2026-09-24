@@ -4,6 +4,7 @@ import {
   BUILD_COOLDOWN,
   BUILD_LIMIT,
   BUILD_WINDOW,
+  parseIosBuildQuota,
   parseIosBuilds,
   planIosBuild,
   readIosBuildHistory,
@@ -106,5 +107,63 @@ describe("iPhone native build budget", () => {
     }
     const page = Array.from({ length: 50 }, (_, i) => build(String(i), i * DAY));
     expect(() => readIosBuildHistory(() => page)).toThrow("changed during pagination");
+  });
+
+  describe("with Expo's billing-period quota", () => {
+    const quota = (used: number, limit = 15) => ({
+      used,
+      limit,
+      periodEnd: "2026-10-01T00:00:00.000Z",
+    });
+    // Expo does not bill failed builds, so its count can sit below the attempts.
+    const attempts = Array.from({ length: 16 }, (_, i) => build(String(i), (4 + i) * DAY));
+
+    it("spends remaining quota even when the rolling attempt count is over the cap", () => {
+      expect(planIosBuild(attempts, NOW).build).toBe(false);
+      const plan = planIosBuild(attempts, NOW, false, quota(14));
+      expect(plan.build).toBe(true);
+      expect(plan.reason).toContain("14/15 iPhone builds used this Expo billing period");
+    });
+
+    it("stops at Expo's limit until the period resets, including urgent runs", () => {
+      const plan = planIosBuild(attempts, NOW, true, quota(15));
+      expect(plan.build).toBe(false);
+      expect(plan.reason).toContain("Next eligible after 2026-10-01T00:00:00.000Z");
+    });
+
+    it("keeps the cooldown and the pending-build guard", () => {
+      expect(planIosBuild([build("last", DAY)], NOW, false, quota(1)).build).toBe(false);
+      expect(planIosBuild([build("last", DAY)], NOW, true, quota(1)).build).toBe(true);
+      expect(planIosBuild([build("pending", 4 * DAY, "IN_QUEUE")], NOW, true, quota(1)).build).toBe(
+        false,
+      );
+    });
+
+    it("reads eas account:usage output and rejects anything else", () => {
+      expect(
+        parseIosBuildQuota({
+          account: { billingPeriod: { end: "2026-10-01T00:00:00.000Z" } },
+          builds: { ios: { plan: { used: 14, limit: 15 } } },
+        }),
+      ).toEqual(quota(14));
+      for (const value of [
+        null,
+        {},
+        {
+          account: { billingPeriod: { end: "soon" } },
+          builds: { ios: { plan: { used: 1, limit: 15 } } },
+        },
+        {
+          account: { billingPeriod: { end: "2026-10-01" } },
+          builds: { ios: { plan: { used: 1.5, limit: 15 } } },
+        },
+        {
+          account: { billingPeriod: { end: "2026-10-01" } },
+          builds: { ios: { plan: { used: "1", limit: 15 } } },
+        },
+      ]) {
+        expect(() => parseIosBuildQuota(value)).toThrow("invalid iPhone build usage");
+      }
+    });
   });
 });

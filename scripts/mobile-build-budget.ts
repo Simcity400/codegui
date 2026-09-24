@@ -64,10 +64,46 @@ export function readIosBuildHistory(
   }
 }
 
+/** Expo's own count of iPhone builds in the current billing period. */
+export interface IosBuildQuota {
+  readonly used: number;
+  readonly limit: number;
+  readonly periodEnd: string;
+}
+
+/** Reads `eas account:usage --json`; anything unexpected is rejected, never read as spare capacity. */
+export function parseIosBuildQuota(value: unknown): IosBuildQuota {
+  const usage = value as {
+    readonly account?: { readonly billingPeriod?: { readonly end?: unknown } };
+    readonly builds?: { readonly ios?: { readonly plan?: { used?: unknown; limit?: unknown } } };
+  } | null;
+  const used = usage?.builds?.ios?.plan?.used;
+  const limit = usage?.builds?.ios?.plan?.limit;
+  const periodEnd = usage?.account?.billingPeriod?.end;
+  if (
+    typeof used !== "number" ||
+    typeof limit !== "number" ||
+    !Number.isInteger(used) ||
+    !Number.isInteger(limit) ||
+    used < 0 ||
+    limit < 0 ||
+    typeof periodEnd !== "string" ||
+    !Number.isFinite(Date.parse(periodEnd))
+  )
+    throw new Error("EAS returned invalid iPhone build usage.");
+  return { used, limit, periodEnd };
+}
+
+/**
+ * Plans against Expo's billing-period quota when it is readable, which counts
+ * what Expo actually charges for. Without it, a conservative rolling cap over
+ * every attempt stands in.
+ */
 export function planIosBuild(
   builds: ReadonlyArray<IosBuild>,
   now: number,
   urgent = false,
+  quota: IosBuildQuota | null = null,
 ): { build: boolean; reason: string } {
   if (!Number.isFinite(now)) throw new Error("Invalid budget check time.");
   if (builds.some((build) => !SETTLED_STATUSES.has(build.status))) {
@@ -84,7 +120,13 @@ export function planIosBuild(
     .sort((a, b) => b - a);
   const latest = recent[0];
   const cooldownEnds = latest === undefined ? now : latest + BUILD_COOLDOWN;
-  if (recent.length >= BUILD_LIMIT) {
+  if (quota !== null && quota.used >= quota.limit) {
+    return {
+      build: false,
+      reason: `Native update deferred: ${quota.used}/${quota.limit} iPhone builds used this Expo billing period. Next eligible after ${quota.periodEnd}. The daily check will retry automatically.`,
+    };
+  }
+  if (quota === null && recent.length >= BUILD_LIMIT) {
     const budgetOpens = recent[BUILD_LIMIT - 1]! + BUILD_WINDOW;
     const retryAt = urgent ? budgetOpens : Math.max(budgetOpens, cooldownEnds);
     return {
@@ -98,10 +140,34 @@ export function planIosBuild(
       reason: `Native update deferred until ${new Date(cooldownEnds).toISOString()} (three-day cooldown). The daily check will retry automatically.`,
     };
   }
+  const usage =
+    quota === null
+      ? `${recent.length}/${BUILD_LIMIT} attempts in the last 31 days`
+      : `${quota.used}/${quota.limit} iPhone builds used this Expo billing period`;
   return {
     build: true,
-    reason: `Native build allowed: ${recent.length}/${BUILD_LIMIT} attempts in the last 31 days.${urgent ? " Urgent run bypasses the cooldown, but keeps the budget cap." : ""}`,
+    reason: `Native build allowed: ${usage}.${urgent ? " Urgent run bypasses the cooldown, but keeps the budget cap." : ""}`,
   };
+}
+
+/** Null when the token cannot read account usage; the rolling cap then applies. */
+function readIosBuildQuota(): IosBuildQuota | null {
+  const account = process.env.EXPO_ACCOUNT;
+  if (!account) return null;
+  try {
+    return parseIosBuildQuota(
+      JSON.parse(
+        NodeChildProcess.execFileSync(
+          "eas",
+          ["account:usage", account, "--json", "--non-interactive"],
+          { encoding: "utf8", stdio: ["ignore", "pipe", "inherit"], timeout: 120_000 },
+        ),
+      ),
+    );
+  } catch (error) {
+    console.warn(`Expo usage unavailable, using the rolling build cap: ${String(error)}`);
+    return null;
+  }
 }
 
 if (import.meta.main) {
@@ -133,6 +199,7 @@ if (import.meta.main) {
         ),
         Date.now(),
         process.env.URGENT_NATIVE_BUILD === "true",
+        readIosBuildQuota(),
       );
   console.log(plan.reason);
   if (process.env.GITHUB_OUTPUT) {

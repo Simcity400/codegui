@@ -133,6 +133,7 @@ jobs:
         working-directory: apps/mobile
         env:
           EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+          EXPO_ACCOUNT: simcity400
           COMPATIBLE_IOS_BUILD_ID: ${{ steps.fingerprint.outputs.ios-build-id }}
           URGENT_NATIVE_BUILD: ${{ github.event_name == 'workflow_dispatch' && inputs.urgent_native_build == true }}
         run: node ../../scripts/mobile-build-budget.ts
