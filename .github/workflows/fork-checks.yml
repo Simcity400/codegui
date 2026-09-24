@@ -88,6 +88,11 @@ jobs:
             apps/server/src/orchestration/Layers/ProviderRuntimeIngestion.test.ts \
             apps/server/src/orchestration/Layers/ProjectionPipeline.test.ts \
             apps/server/src/orchestration/Layers/ProjectionSnapshotQuery.test.ts \
+            apps/mobile/src/lib/threadActivity.fork.test.ts \
+            apps/server/src/orchestration/Layers/ProviderRuntimeIngestion.activity.fork.test.ts \
+            apps/server/src/persistence/Layers/OrchestrationEventStore.fork.test.ts \
+            apps/server/src/provider/Layers/ClaudeSubagentTranscript.test.ts \
+            packages/client-runtime/src/state/subagentRuntime.fork.test.ts \
             apps/desktop/src/updates/upstreamMerge.test.ts
           vp test run scripts/build-desktop-artifact.test.ts -t "Windows|sidecar|ASAR"
       - name: Test web feature controls
