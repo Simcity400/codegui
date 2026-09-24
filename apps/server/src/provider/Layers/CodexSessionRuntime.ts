@@ -38,6 +38,10 @@ import * as EffectCodexSchema from "effect-codex-app-server/schema";
 
 import { buildCodexInitializeParams } from "./CodexProvider.ts";
 import { codexSessionAppServerArgs } from "./codexLaunchArgs.ts";
+import {
+  codexCollabTranscriptEvent,
+  isCodexCollabTranscriptMethod,
+} from "./CodexCollabTranscript.ts";
 import { expandHomePath } from "../../pathExpansion.ts";
 import {
   buildCodexDeveloperInstructions,
@@ -1726,29 +1730,19 @@ export const makeCodexSessionRuntime = (
         const child = children.get(providerConversationId);
         // Content can arrive before registration. The provider thread id already
         // identifies its owner; never let these items enter the root transcript.
-        if (
-          interceptRootId !== undefined &&
-          (notification.method === "item/started" ||
-            notification.method === "item/completed" ||
-            notification.method === "item/agentMessage/delta")
-        ) {
-          const route = readRouteFields(notification);
-          const parentTurnId =
-            child?.spawnTurnId ??
-            (yield* Ref.get(collabReceiverTurnsRef)).get(providerConversationId) ??
-            (yield* Ref.get(collabParentTurnIdRef));
-          yield* emitEvent({
-            kind: "notification",
-            threadId: options.threadId,
-            ...(parentTurnId ? { turnId: parentTurnId } : {}),
-            ...(route.itemId ? { itemId: route.itemId } : {}),
-            method: "collabAgent/transcript",
-            payload: {
+        if (interceptRootId !== undefined && isCodexCollabTranscriptMethod(notification.method)) {
+          yield* emitEvent(
+            codexCollabTranscriptEvent({
+              threadId: options.threadId,
+              parentTurnId:
+                child?.spawnTurnId ??
+                (yield* Ref.get(collabReceiverTurnsRef)).get(providerConversationId) ??
+                (yield* Ref.get(collabParentTurnIdRef)),
+              itemId: readRouteFields(notification).itemId,
               agentThreadId: providerConversationId,
-              method: notification.method,
-              params: notification.params,
-            },
-          });
+              notification,
+            }),
+          );
           if (!child || notification.method === "item/agentMessage/delta") return true;
         }
         if (!child) {
@@ -1988,7 +1982,9 @@ export const makeCodexSessionRuntime = (
           return;
         }
 
-        if (isMemoryConsolidationNotification) return;
+        if (isMemoryConsolidationNotification) {
+          return;
+        }
 
         let requestId: ApprovalRequestId | undefined;
         let requestKind: ProviderRequestKind | undefined;

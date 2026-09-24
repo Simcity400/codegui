@@ -69,6 +69,7 @@ import {
   type CodexSessionRuntimeSendTurnInput,
   type CodexSessionRuntimeShape,
 } from "./CodexSessionRuntime.ts";
+import { mapCodexCollabTranscript } from "./CodexCollabTranscript.ts";
 import { type EventNdjsonLogger, makeEventNdjsonLogger } from "./EventNdjsonLogger.ts";
 import { resolveCodexLaunchArgs } from "./codexLaunchArgs.ts";
 import {
@@ -1084,33 +1085,8 @@ function mapCollabAgentEvent(
   } as const;
 
   switch (event.method) {
-    case "collabAgent/transcript": {
-      if (
-        payload.method !== "item/started" &&
-        payload.method !== "item/completed" &&
-        payload.method !== "item/agentMessage/delta"
-      )
-        return [];
-      // Reuse ordinary item decoding, then attach ownership only to transcript
-      // events. Child compaction and plans must not change the root turn.
-      return mapToRuntimeEvents(
-        { ...event, method: payload.method, payload: payload.params },
-        canonicalThreadId,
-      ).flatMap((entry): ProviderRuntimeEvent[] => {
-        if (entry.type === "content.delta") {
-          return [{ ...entry, payload: { ...entry.payload, agentId: agentThreadId } }];
-        }
-        if (
-          entry.type === "item.started" ||
-          entry.type === "item.updated" ||
-          entry.type === "item.completed"
-        ) {
-          if (entry.payload.itemType === "reasoning") return [];
-          return [{ ...entry, payload: { ...entry.payload, agentId: agentThreadId } }];
-        }
-        return [];
-      });
-    }
+    case "collabAgent/transcript":
+      return mapCodexCollabTranscript(event, canonicalThreadId, agentThreadId, mapToRuntimeEvents);
     case "collabAgent/started":
       return [
         {
