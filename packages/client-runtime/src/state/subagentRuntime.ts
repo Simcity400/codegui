@@ -85,6 +85,8 @@ export interface RuntimeSubagent {
   readonly taskType: string | null;
   /** Subagent that launched this task, when it ran inside one. */
   readonly owningAgentId: string | null;
+  /** Codex's slash-separated spawn path (`/root/parent/child`); names the parent when no id does. */
+  readonly agentPath: string | null;
   /** Tool use that launched the CURRENT activation; a new id on a start row
    * after the run settled is how a same-id resume is told from a replay. */
   readonly toolUseId: string | null;
@@ -262,6 +264,7 @@ interface MutableAgent {
   recentActivity: ReadonlyArray<SubagentActivityEntry>;
   taskType: string | null;
   owningAgentId: string | null;
+  agentPath: string | null;
   toolUseId: string | null;
   firstSeenAt: string;
   startedAt: string | null;
@@ -324,6 +327,7 @@ function getOrCreate(
     recentActivity: [],
     taskType: asString(payload.taskType) ?? null,
     owningAgentId: asString(payload.agentId) ?? null,
+    agentPath: asString(payload.agentPath) ?? null,
     toolUseId: null,
     firstSeenAt: at,
     startedAt: null,
@@ -358,6 +362,8 @@ function fillMetadata(agent: MutableAgent, payload: Record<string, unknown>): vo
   if (taskType === "local_workflow") agent.kind = "workflow";
   const owningAgentId = asString(payload.agentId);
   if (owningAgentId) agent.owningAgentId = owningAgentId;
+  const agentPath = asString(payload.agentPath);
+  if (agentPath) agent.agentPath = agentPath;
   if (payload.isBackgrounded === true) agent.backgrounded = true;
   // Progress and terminal rows repeat the launching tool use, so a task first
   // seen mid-run still learns its activation identity.

@@ -231,6 +231,9 @@ function BackgroundTaskRow({
   );
 }
 
+/** Deep Codex trees stop indenting here; the rail still marks each level. */
+const MAX_NEST_INDENT_DEPTH = 6;
+
 /**
  * One agent with everything it launched beneath it: nested subagents recurse,
  * its background tasks sit at the same level as its children. A rail marks
@@ -248,7 +251,12 @@ function FamilyRows({ node }: { node: AgentFamilyNode }) {
         <AgentRow agent={node.agent} />
       )}
       {node.children.length > 0 ? (
-        <div className="ml-3 border-l border-border/40 pl-1">
+        <div
+          className={cn(
+            "border-l border-border/40",
+            node.depth < MAX_NEST_INDENT_DEPTH && "ml-3 pl-1",
+          )}
+        >
           {active.map((child) => (
             <FamilyRows key={child.agent.id} node={child} />
           ))}

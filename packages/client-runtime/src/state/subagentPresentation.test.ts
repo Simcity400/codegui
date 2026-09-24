@@ -110,6 +110,7 @@ describe("subagent presentation", () => {
       recentActivity: [],
       taskType: null,
       owningAgentId: null,
+      agentPath: null,
       toolUseId: null,
       startedAt: null,
       completedAt: null,
@@ -209,6 +210,7 @@ describe("subagent presentation", () => {
       recentActivity: [],
       taskType: null,
       owningAgentId,
+      agentPath: null,
       toolUseId: null,
       firstSeenAt: "2026-09-09T10:00:00.000Z",
       startedAt: null,
@@ -225,6 +227,34 @@ describe("subagent presentation", () => {
     const codex = buildAgentFamilies([codexParent, codexChild], []);
     expect(codex.roots.map((node) => node.agent.id)).toEqual(["codex-parent"]);
     expect(codex.roots[0]!.children.map((node) => node.agent.id)).toEqual(["codex-child"]);
+
+    // Codex often sends only the spawn path. A respawned nickname reuses its
+    // path, so a child nests under the latest holder spawned before it.
+    // The root thread's id is never in the roster, so it cannot shadow the path.
+    const pathAgent = (id: string, agentPath: string, firstSeenAt: string) => ({
+      ...stub(id, "x"),
+      owningAgentId: null,
+      parentAgentId: "codex-root-thread",
+      agentPath,
+      firstSeenAt,
+    });
+    const byPath = buildAgentFamilies(
+      [
+        pathAgent("old-lead", "/root/lead", "2026-09-09T10:00:00.000Z"),
+        pathAgent("new-lead", "/root/lead", "2026-09-09T11:00:00.000Z"),
+        pathAgent("reader", "/root/lead/reader", "2026-09-09T11:05:00.000Z"),
+        pathAgent("deep", "/root/lead/reader/deep", "2026-09-09T11:06:00.000Z"),
+      ],
+      [],
+    );
+    expect(byPath.roots.map((node) => node.agent.id)).toEqual(["old-lead", "new-lead"]);
+    expect(flattenAgentFamily(byPath.roots[1]!).map((node) => [node.agent.id, node.depth])).toEqual(
+      [
+        ["new-lead", 0],
+        ["reader", 1],
+        ["deep", 2],
+      ],
+    );
 
     const families = buildAgentFamilies([stub("a", "b"), stub("b", "a")], []);
     const ids = families.roots.flatMap((root) => flattenAgentFamily(root).map((n) => n.agent.id));

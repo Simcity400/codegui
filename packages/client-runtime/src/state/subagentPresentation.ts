@@ -202,7 +202,33 @@ export interface AgentFamilies {
   readonly unownedTasks: ReadonlyArray<RuntimeSubagent>;
 }
 
-const FAMILY_DEPTH_LIMIT = 8;
+// Codex agent trees run past a dozen levels; clients cap indentation, not nesting.
+const FAMILY_DEPTH_LIMIT = 32;
+
+/**
+ * Codex often reports a nested child only by its spawn path. A respawned
+ * nickname reuses its path, so the parent is the latest holder of the parent
+ * path spawned no later than the child.
+ */
+function makePathParentLookup(agents: ReadonlyArray<RuntimeSubagent>) {
+  const byPath = new Map<string, RuntimeSubagent[]>();
+  for (const agent of agents) {
+    if (agent.agentPath === null) continue;
+    const holders = byPath.get(agent.agentPath) ?? [];
+    holders.push(agent);
+    byPath.set(agent.agentPath, holders);
+  }
+  return (agent: RuntimeSubagent): string | null => {
+    const cut = agent.agentPath?.lastIndexOf("/") ?? -1;
+    if (cut <= 0) return null;
+    let parent: RuntimeSubagent | null = null;
+    for (const holder of byPath.get(agent.agentPath!.slice(0, cut)) ?? []) {
+      if (holder.firstSeenAt > agent.firstSeenAt) continue;
+      if (parent === null || holder.firstSeenAt >= parent.firstSeenAt) parent = holder;
+    }
+    return parent?.id ?? null;
+  };
+}
 
 /**
  * Nests every agent under the agent that launched it (owningAgentId) and
@@ -219,13 +245,17 @@ export function buildAgentFamilies(
   const byId = new Map(agents.map((agent) => [agent.id, agent]));
   const childAgents = new Map<string, RuntimeSubagent[]>();
   const roots: RuntimeSubagent[] = [];
+  const pathParent = makePathParentLookup(agents);
   for (const agent of agents) {
     // Claude names the launching agent in owningAgentId; Codex names a nested
-    // child's parent thread in parentAgentId. Either nests the agent when that
-    // parent is itself in this roster (a workflow coordinator is not: its
-    // members render in the workflow group instead).
-    const owner = agent.owningAgentId ?? agent.parentAgentId;
-    if (owner !== null && owner !== agent.id && byId.has(owner)) {
+    // child's parent thread in parentAgentId, or only its spawn path. The first
+    // that is itself in this roster nests the agent (a workflow coordinator is
+    // not: its members render in the workflow group). Codex's root thread id
+    // is never in the roster, so the path still gets its turn.
+    const owner = [agent.owningAgentId, agent.parentAgentId, pathParent(agent)].find(
+      (id) => id !== null && id !== agent.id && byId.has(id),
+    );
+    if (owner !== undefined && owner !== null) {
       const list = childAgents.get(owner) ?? [];
       list.push(agent);
       childAgents.set(owner, list);

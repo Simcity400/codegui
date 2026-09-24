@@ -118,6 +118,12 @@ function AgentElapsed({ agent }: { readonly agent: RuntimeSubagent }) {
 
 /** Nested launches inset per level so a grandchild reads as a grandchild. */
 const NEST_INSET = 14;
+/** Deep Codex trees stop indenting here so rows keep room for their text. */
+const MAX_NEST_INSET_DEPTH = 6;
+
+function nestInsetStyle(depth: number) {
+  return depth > 0 ? { marginLeft: Math.min(depth, MAX_NEST_INSET_DEPTH) * NEST_INSET } : undefined;
+}
 
 /** Mirrors the desktop roster row: dot, title, elapsed, activity, metadata. */
 const AgentRow = memo(function AgentRow(props: {
@@ -141,7 +147,7 @@ const AgentRow = memo(function AgentRow(props: {
       accessibilityRole="button"
       accessibilityLabel={`Open ${title} transcript, ${statusLabel}`}
       className="flex-row items-center gap-3 rounded-xl border border-border bg-card px-3 py-2.5 active:bg-subtle"
-      style={props.depth > 0 ? { marginLeft: props.depth * NEST_INSET } : undefined}
+      style={nestInsetStyle(props.depth)}
       onPress={() => props.onPress(agent)}
     >
       <View className="min-w-0 flex-1 gap-0.5">
@@ -194,7 +200,7 @@ const BackgroundTaskRow = memo(function BackgroundTaskRow(props: {
     <View
       accessibilityLabel={`${task.title}, ${statusLabel}`}
       className="flex-row items-center gap-3 rounded-xl border border-border bg-card px-3 py-2.5"
-      style={props.depth > 0 ? { marginLeft: props.depth * NEST_INSET } : undefined}
+      style={nestInsetStyle(props.depth)}
     >
       <View className="min-w-0 flex-1 gap-0.5">
         <View className="flex-row items-center gap-2">
@@ -296,7 +302,7 @@ export function ThreadAgentsRouteScreen(props: StaticScreenProps<ThreadParams>) 
             }
             onPress={() => toggleSection(item.key)}
             className="flex-row items-center gap-1.5 px-1 py-2"
-            style={item.depth > 0 ? { marginLeft: item.depth * NEST_INSET } : undefined}
+            style={nestInsetStyle(item.depth)}
           >
             {item.expanded === undefined ? (
               <BotIcon size={12} colorClassName="accent-icon-muted" />

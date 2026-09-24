@@ -27,6 +27,7 @@ const base = {
   recentActivity: [],
   taskType: null,
   owningAgentId: null,
+  agentPath: null,
   toolUseId: null,
   startedAt: null,
   completedAt: null,
