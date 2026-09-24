@@ -3918,6 +3918,117 @@ describe("ClaudeAdapterLive", () => {
     );
   });
 
+  it.effect("records subagent snapshots as the owning agent's transcript", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      const agentItemsFiber = yield* adapter.streamEvents.pipe(
+        Stream.filter(
+          (
+            event,
+          ): event is Extract<
+            ProviderRuntimeEvent,
+            { type: "item.started" | "item.updated" | "item.completed" }
+          > =>
+            (event.type === "item.started" ||
+              event.type === "item.updated" ||
+              event.type === "item.completed") &&
+            event.payload.agentId === "task-sub",
+        ),
+        Stream.take(6),
+        Stream.runCollect,
+        Effect.forkChild,
+      );
+
+      const session = yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: ProviderDriverKind.make("claudeAgent"),
+        runtimeMode: "full-access",
+      });
+      yield* adapter.sendTurn({ threadId: session.threadId, input: "spawn", attachments: [] });
+
+      harness.query.emit({
+        type: "system",
+        subtype: "task_started",
+        task_id: "task-sub",
+        description: "Survey",
+        task_type: "local_agent",
+        tool_use_id: "toolu_agent_sub",
+        uuid: "task-sub-start",
+        session_id: "sdk-session",
+      } as unknown as SDKMessage);
+      // The CLI forwards one content block per subagent snapshot.
+      const snapshot = (uuid: string, block: unknown) =>
+        harness.query.emit({
+          type: "assistant",
+          parent_tool_use_id: "toolu_agent_sub",
+          message: { model: SYNTHETIC_SUBAGENT_MODEL, content: [block] },
+          uuid,
+          session_id: "sdk-session",
+        } as unknown as SDKMessage);
+      snapshot("snap-thinking", { type: "thinking", thinking: "private" });
+      snapshot("snap-bash", {
+        type: "tool_use",
+        id: "toolu_sub_bash",
+        name: "Bash",
+        input: { command: "git status" },
+      });
+      snapshot("snap-read", {
+        type: "tool_use",
+        id: "toolu_sub_read",
+        name: "Read",
+        input: { file_path: "README.md" },
+      });
+      harness.query.emit({
+        type: "user",
+        parent_tool_use_id: "toolu_agent_sub",
+        message: {
+          role: "user",
+          content: [{ type: "tool_result", tool_use_id: "toolu_sub_bash", content: "clean" }],
+        },
+        uuid: "sub-result",
+        session_id: "sdk-session",
+      } as unknown as SDKMessage);
+      snapshot("snap-text", { type: "text", text: "The tree is clean." });
+      // The task ends with its Read still open: that tool closes with it.
+      harness.query.emit({
+        type: "system",
+        subtype: "task_notification",
+        task_id: "task-sub",
+        tool_use_id: "toolu_agent_sub",
+        status: "completed",
+        output_file: "",
+        summary: "Done",
+        uuid: "task-sub-done",
+        session_id: "sdk-session",
+      } as unknown as SDKMessage);
+
+      const items = Array.from(yield* Fiber.join(agentItemsFiber));
+      assert.deepEqual(
+        items.map((event): ReadonlyArray<string | undefined> => [
+          event.type,
+          event.itemId,
+          event.payload.itemType,
+        ]),
+        [
+          ["item.started", "toolu_sub_bash", "command_execution"],
+          ["item.started", "toolu_sub_read", "dynamic_tool_call"],
+          ["item.updated", "toolu_sub_bash", "command_execution"],
+          ["item.completed", "toolu_sub_bash", "command_execution"],
+          ["item.completed", "snap-text:0", "assistant_message"],
+          ["item.completed", "toolu_sub_read", "dynamic_tool_call"],
+        ],
+      );
+      const text = items[4];
+      if (text?.type === "item.completed") {
+        assert.equal(text.payload.detail, "The tree is clean.");
+      }
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
   it.effect("a subagent snapshot that beats task_started still wins over the seed", () => {
     const harness = makeHarness();
     return Effect.gen(function* () {
@@ -4078,9 +4189,6 @@ describe("ClaudeAdapterLive", () => {
           uuid: "task-bg-progress-2",
           session_id: "sdk-session",
         } as unknown as SDKMessage);
-        // NOTE: upstream skips subagent snapshot transcripts (model refine
-        // only), so snapshot tool_use blocks do not register here; live
-        // subagent tools attribute through the streaming path instead.
         const taskEvents = Array.from(yield* Fiber.join(taskEventsFiber));
         assert.deepEqual(
           taskEvents.map((event) => event.type),
