@@ -1561,8 +1561,8 @@ export default function ChatView(props: ChatViewProps) {
     [routeServerThreadShell, threadDetailLoading],
   );
   const activeServerThread = serverThread ?? loadingServerThread;
-  // Pagination window state for the routed server thread: drives the
-  // "load earlier turns" header when the loaded window has older history.
+  // Pagination window state for the routed server thread: older turns load
+  // by themselves when the timeline reaches its top.
   const routeThreadState = useEnvironmentThread(
     routeKind === "server" ? routeThreadRef.environmentId : null,
     routeKind === "server" ? routeThreadRef.threadId : null,
@@ -9710,7 +9710,6 @@ export default function ChatView(props: ChatViewProps) {
         model={agentPanelModel}
         environmentId={activeThreadRef?.environmentId ?? null}
         threadId={activeThreadRef?.threadId ?? null}
-        loadEarlier={loadEarlierTurns}
         renderTranscript={(agent, { openRoster }) => (
           <ChatAgentTranscript
             key={agent.id}

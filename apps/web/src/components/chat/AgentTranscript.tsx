@@ -8,10 +8,7 @@ import type { RuntimeSubagent } from "@t3tools/client-runtime/state/subagentRunt
 import { ChevronDownIcon } from "lucide-react";
 import { useMemo, useRef, useState, type ComponentProps } from "react";
 import * as Option from "effect/Option";
-import {
-  requestOlderThreadTurns,
-  threadHasOlderTurns,
-} from "@t3tools/client-runtime/state/threads";
+import { threadHasOlderTurns } from "@t3tools/client-runtime/state/threads";
 import type { EnvironmentId, ThreadId } from "@t3tools/contracts";
 import { useEnvironmentThread } from "../../state/threads";
 
@@ -34,7 +31,6 @@ type AgentTranscriptProps = Pick<
   | "resolvedTheme"
   | "timestampFormat"
   | "workspaceRoot"
-  | "loadEarlier"
   | "onImageExpand"
   | "onFileOpen"
   | "onFileDownload"
@@ -44,10 +40,18 @@ type AgentTranscriptProps = Pick<
   agent: RuntimeSubagent;
   messages: readonly OrchestrationMessage[];
   activities: readonly OrchestrationThreadActivity[];
+  /** The Agents panel is still fetching older pages; hide "no messages" until done. */
+  historyPending?: boolean;
 };
 
 /** Reuse the main transcript's virtualized text, reasoning and tool renderers. */
-export function AgentTranscript({ agent, messages, activities, ...props }: AgentTranscriptProps) {
+export function AgentTranscript({
+  agent,
+  messages,
+  activities,
+  historyPending = false,
+  ...props
+}: AgentTranscriptProps) {
   const listRef = useRef<LegendListRef | null>(null);
   const [liveFollowEnabled, setLiveFollowEnabled] = useState(true);
   const scoped = useMemo(
@@ -78,7 +82,7 @@ export function AgentTranscript({ agent, messages, activities, ...props }: Agent
         liveFollowEnabled={liveFollowEnabled}
         onIsAtEndChange={setLiveFollowEnabled}
         onManualNavigation={() => setLiveFollowEnabled(false)}
-        hideEmptyPlaceholder={props.loadEarlier != null}
+        hideEmptyPlaceholder={historyPending}
       />
       {!liveFollowEnabled && (
         <div className="pointer-events-none absolute bottom-1 left-1/2 z-30 flex -translate-x-1/2 justify-center py-1.5">
@@ -107,7 +111,7 @@ const EMPTY_ACTIVITIES: readonly OrchestrationThreadActivity[] = [];
 
 type ScopedAgentTranscriptProps = Omit<
   AgentTranscriptProps,
-  "messages" | "activities" | "loadEarlier"
+  "messages" | "activities" | "historyPending"
 > & {
   environmentId: EnvironmentId;
   threadId: ThreadId;
@@ -126,22 +130,12 @@ export function ScopedAgentTranscript({
 }: ScopedAgentTranscriptProps) {
   const state = useEnvironmentThread(environmentId, threadId);
   const thread = Option.getOrNull(state.data);
-  const loadEarlier = useMemo(() => {
-    if (!threadHasOlderTurns(state)) return null;
-    return {
-      loading: state.page._tag === "Some" && state.page.value.loadingOlder,
-      cursor: state.page._tag === "Some" ? state.page.value.beforeCursor : null,
-      onLoadEarlier: () => {
-        requestOlderThreadTurns(environmentId, threadId);
-      },
-    };
-  }, [environmentId, state, threadId]);
   return (
     <AgentTranscript
       agent={agent}
       messages={thread?.messages ?? EMPTY_MESSAGES}
       activities={thread?.activities ?? EMPTY_ACTIVITIES}
-      loadEarlier={loadEarlier}
+      historyPending={threadHasOlderTurns(state)}
       {...props}
     />
   );

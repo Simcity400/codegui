@@ -69,13 +69,22 @@ function useAgentThread(params: ThreadParams) {
     detailDeleted: state.status === "deleted",
     connectionState: runtime?.connectionState ?? "available",
   });
-  const loadEarlier = threadHasOlderTurns(state)
-    ? {
-        cursor: Option.getOrNull(state.page)?.beforeCursor ?? null,
-        loading: Option.isSome(state.page) && state.page.value.loadingOlder,
-        onLoadEarlier: () => requestOlderThreadTurns(environmentId, threadId),
-      }
-    : null;
+  // The roster and transcripts read the thread's loaded rows, and a thread
+  // opens with only its latest turns. Fetch every older page while an agents
+  // screen is open, so no agent or transcript is missing.
+  const historyPending = threadHasOlderTurns(state);
+  const page = Option.getOrNull(state.page);
+  const loadingOlder = page?.loadingOlder === true;
+  const cursor = page?.beforeCursor ?? null;
+  const requestedCursor = useRef<string | null>(null);
+  useEffect(() => {
+    if (!historyPending || loadingOlder) return;
+    // One request per cursor: a failed page leaves the cursor unchanged, so it is not retried in a loop.
+    const key = `${environmentId}:${threadId}:${cursor}`;
+    if (requestedCursor.current === key) return;
+    requestedCursor.current = key;
+    requestOlderThreadTurns(environmentId, threadId);
+  }, [cursor, environmentId, historyPending, loadingOlder, threadId]);
   return {
     environmentId,
     threadId,
@@ -83,7 +92,7 @@ function useAgentThread(params: ThreadParams) {
     agents,
     backgroundTasks,
     presentation,
-    loadEarlier,
+    historyPending,
     workspaceRoot,
   };
 }
@@ -237,10 +246,9 @@ const BackgroundTaskRow = memo(function BackgroundTaskRow(props: {
 
 export function ThreadAgentsRouteScreen(props: StaticScreenProps<ThreadParams>) {
   const navigation = useNavigation();
-  const { environmentId, threadId, agents, backgroundTasks, presentation, loadEarlier } =
+  const { environmentId, threadId, agents, backgroundTasks, presentation, historyPending } =
     useAgentThread(props.route.params);
   const insets = useSafeAreaInsets();
-  const historyRequest = useRef<{ key: string | null; size: number }>({ key: null, size: 0 });
   const [expandedSections, setExpandedSections] = useState<ReadonlySet<string>>(() => new Set());
   const sectionScope = `${environmentId}:${threadId}:`;
   const rows = useMemo(
@@ -265,21 +273,11 @@ export function ThreadAgentsRouteScreen(props: StaticScreenProps<ThreadParams>) 
       return next;
     });
   };
-  const rosterSize = agents.length + backgroundTasks.length;
   const openTranscript = useCallback(
     (agent: RuntimeSubagent) =>
       navigation.navigate("ThreadAgentTranscript", { ...props.route.params, agentId: agent.id }),
     [navigation, props.route.params],
   );
-
-  // Parent history pages may contain no agents, leaving the list too short to reach its edge again.
-  useEffect(() => {
-    if (rosterSize !== historyRequest.current.size || !loadEarlier || loadEarlier.loading) return;
-    const key = `${environmentId}:${threadId}:${loadEarlier.cursor}`;
-    if (historyRequest.current.key === key) return;
-    historyRequest.current = { key, size: rosterSize };
-    loadEarlier.onLoadEarlier();
-  }, [rosterSize, environmentId, threadId, loadEarlier]);
 
   if (presentation.kind === "loading") return <LoadingScreen message="Loading agents…" />;
   if (presentation.kind === "unavailable") {
@@ -325,21 +323,15 @@ export function ThreadAgentsRouteScreen(props: StaticScreenProps<ThreadParams>) 
         )
       }
       ListEmptyComponent={
-        <EmptyState
-          title="No agents yet"
-          detail="Subagents and background tasks will appear here when the provider reports them."
-        />
+        historyPending ? (
+          <LoadingScreen message="Loading agents…" />
+        ) : (
+          <EmptyState
+            title="No agents yet"
+            detail="Subagents and background tasks will appear here when the provider reports them."
+          />
+        )
       }
-      onEndReached={() => {
-        if (loadEarlier && !loadEarlier.loading) {
-          historyRequest.current = {
-            key: `${environmentId}:${threadId}:${loadEarlier.cursor}`,
-            size: rosterSize,
-          };
-          loadEarlier.onLoadEarlier();
-        }
-      }}
-      onEndReachedThreshold={0.25}
     />
   );
 }
@@ -361,12 +353,6 @@ export function ThreadAgentTranscriptRouteScreen(
     detailDeleted: scopedState.status === "deleted",
     connectionState: runtime?.connectionState ?? "available",
   });
-  const loadEarlier = threadHasOlderTurns(scopedState)
-    ? {
-        loading: Option.isSome(scopedState.page) && scopedState.page.value.loadingOlder,
-        onLoadEarlier: () => requestOlderThreadTurns(environmentId, threadId),
-      }
-    : null;
   const messages = scopedThread?.messages;
   const activities = scopedThread?.activities;
   const scoped = useMemo(
@@ -407,7 +393,6 @@ export function ThreadAgentTranscriptRouteScreen(
         // measured scroll extent, including the home-indicator safe area.
         contentBottomPadding={insets.bottom + 16}
         alignItemsAtEnd={false}
-        loadEarlier={loadEarlier}
       />
     </View>
   );

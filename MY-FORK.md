@@ -2,7 +2,9 @@
 
 This fork follows T3 Code with these personal additions:
 
-- Subagent panel and transcripts, with a dedicated mobile view.
+- Subagent panel and transcripts, with a dedicated mobile view. The panel loads the
+  thread's full history by itself, and older chat turns load when you scroll to the top,
+  so there is no "Load earlier" button.
 - Personal iPhone notifications and Live Activities sent directly from your T3 server
   (see `docs/operations/personal-iphone-push.md`). The official relay cannot sign pushes
   for this fork's bundle ID.

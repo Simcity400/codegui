@@ -22,7 +22,12 @@ import {
   formatSubagentModelLabel,
   formatSubagentTokenCount,
 } from "@t3tools/client-runtime/state/subagentRuntime";
+import {
+  requestOlderThreadTurns,
+  threadHasOlderTurns,
+} from "@t3tools/client-runtime/state/threads";
 import type { EnvironmentId, ThreadId } from "@t3tools/contracts";
+import * as Option from "effect/Option";
 import { ArrowLeft, Bot, Braces, Check, ChevronDown, ChevronRight, X } from "lucide-react";
 import {
   createContext,
@@ -37,6 +42,7 @@ import {
 
 import { cn } from "~/lib/utils";
 import { orchestrationEnvironment } from "~/state/orchestration";
+import { useEnvironmentThread } from "~/state/threads";
 import { ScrollArea } from "~/components/ui/scroll-area";
 import { Button } from "~/components/ui/button";
 
@@ -827,12 +833,35 @@ function AgentRosterSection({
   );
 }
 
+/**
+ * The roster and transcripts read the thread's loaded rows, and a thread
+ * opens with only its latest turns. While the panel is open, fetch every
+ * older page so no agent or transcript is missing. Returns true until the
+ * full history is loaded.
+ */
+function useFullThreadHistory(environmentId: EnvironmentId | null, threadId: ThreadId | null) {
+  const state = useEnvironmentThread(environmentId, threadId);
+  const page = Option.getOrNull(state.page);
+  const hasOlder = threadHasOlderTurns(state);
+  const loading = page?.loadingOlder === true;
+  const cursor = page?.beforeCursor ?? null;
+  const requested = useRef<string | null>(null);
+  useEffect(() => {
+    if (environmentId === null || threadId === null || !hasOlder || loading) return;
+    // One request per cursor: a failed page leaves the cursor unchanged, so it is not retried in a loop.
+    const key = `${environmentId}:${threadId}:${cursor}`;
+    if (requested.current === key) return;
+    requested.current = key;
+    requestOlderThreadTurns(environmentId, threadId);
+  }, [cursor, environmentId, hasOlder, loading, threadId]);
+  return hasOlder;
+}
+
 export function AgentsPanel({
   model,
   environmentId = null,
   threadId = null,
   renderTranscript,
-  loadEarlier = null,
 }: {
   model: AgentPanelModel;
   environmentId?: EnvironmentId | null;
@@ -842,13 +871,8 @@ export function AgentsPanel({
     agent: RuntimeSubagent,
     controls: { readonly openRoster: () => void },
   ) => ReactNode;
-  /**
-   * Live work is pinned to every history page by the server; settled agents
-   * and tasks from older turns arrive with their page, so the roster offers
-   * the same "load earlier" the transcript has.
-   */
-  loadEarlier?: { readonly loading: boolean; readonly onLoadEarlier: () => void } | null;
 }) {
+  const historyPending = useFullThreadHistory(environmentId, threadId);
   const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null);
   const openTranscript = useCallback((agent: RuntimeSubagent) => setSelectedAgentId(agent.id), []);
   const transcriptControls = useMemo(() => ({ openRoster: () => setSelectedAgentId(null) }), []);
@@ -984,21 +1008,15 @@ export function AgentsPanel({
     return (
       <div className="flex h-full flex-col items-center justify-center gap-2 p-6 text-center">
         <Bot aria-hidden className="size-6 text-muted-foreground/60" />
-        <p className="text-sm font-medium">No agents yet</p>
-        <p className="max-w-56 text-xs text-muted-foreground">
-          When this thread spawns subagents, runs a workflow, or backgrounds a task, they show up
-          here with live status, activity, and token usage.
+        <p className="text-sm font-medium">
+          {historyPending ? "Loading agents…" : "No agents yet"}
         </p>
-        {loadEarlier ? (
-          <Button
-            size="xs"
-            variant="ghost-muted"
-            disabled={loadEarlier.loading}
-            onClick={loadEarlier.onLoadEarlier}
-          >
-            {loadEarlier.loading ? "Loading earlier…" : "Load earlier history"}
-          </Button>
-        ) : null}
+        {historyPending ? null : (
+          <p className="max-w-56 text-xs text-muted-foreground">
+            When this thread spawns subagents, runs a workflow, or backgrounds a task, they show up
+            here with live status, activity, and token usage.
+          </p>
+        )}
       </div>
     );
   }
@@ -1058,17 +1076,6 @@ export function AgentsPanel({
               open={settledTasksOpen}
               onToggle={() => setSettledTasksOpen((value) => !value)}
             />
-            {loadEarlier ? (
-              <Button
-                size="xs"
-                variant="ghost-muted"
-                className="self-center"
-                disabled={loadEarlier.loading}
-                onClick={loadEarlier.onLoadEarlier}
-              >
-                {loadEarlier.loading ? "Loading earlier…" : "Load earlier history"}
-              </Button>
-            ) : null}
           </div>
         </ScrollArea>
         <footer className="flex items-center justify-between border-t border-border/60 px-3 py-1.5 font-mono text-2xs text-muted-foreground">

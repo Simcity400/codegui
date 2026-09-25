@@ -274,7 +274,7 @@ export interface ThreadFeedProps {
   readonly onEndFollowEnabledChange?: (enabled: boolean) => void;
   readonly skills?: ReadonlyArray<SelectableMarkdownSkill>;
   readonly onUseArtifactTemplate?: (template: CodexArtifactTemplate) => void;
-  /** Non-null when older turns exist beyond the loaded window. */
+  /** Non-null when older turns exist beyond the loaded window; they load when the top is reached. */
   readonly loadEarlier?: {
     readonly loading: boolean;
     readonly onLoadEarlier: () => void;
@@ -2971,22 +2971,17 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
             onMomentumScrollBegin={handleMomentumScrollBegin}
             onMomentumScrollEnd={handleMomentumScrollEnd}
             scrollEventThrottle={16}
+            onStartReached={
+              props.loadEarlier != null && !props.loadEarlier.loading
+                ? props.loadEarlier.onLoadEarlier
+                : undefined
+            }
+            onStartReachedThreshold={0.5}
             ListHeaderComponent={
               <>
                 {usesNativeAutomaticInsets ? null : <View style={{ height: topContentInset }} />}
                 {setupAnchorIndex < 0 && props.worktreeSetup ? (
                   <WorktreeSetupCard key={props.threadId} {...props.worktreeSetup} />
-                ) : null}
-                {props.loadEarlier != null ? (
-                  <Pressable
-                    onPress={props.loadEarlier.onLoadEarlier}
-                    disabled={props.loadEarlier.loading}
-                    className="items-center py-2"
-                  >
-                    <Text className="text-xs text-foreground-secondary">
-                      {props.loadEarlier.loading ? "Loading earlier turns…" : "Load earlier turns"}
-                    </Text>
-                  </Pressable>
                 ) : null}
               </>
             }
