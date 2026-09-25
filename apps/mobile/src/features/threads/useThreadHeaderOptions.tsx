@@ -1,7 +1,6 @@
 import { StackActions, useNavigation } from "@react-navigation/native";
 import { HeaderBackContext } from "@react-navigation/elements";
 import { useContext, useMemo } from "react";
-import type { ImageSourcePropType } from "react-native";
 import type { AppNativeStackNavigationOptions } from "../../native/StackHeader";
 import { useAdaptiveWorkspaceLayout } from "../layout/AdaptiveWorkspaceLayout";
 import { withNativeGlassHeaderItem } from "../layout/native-glass-header-items";
@@ -12,9 +11,6 @@ import {
 } from "./ThreadGitControls";
 
 type NativeHeaderItems = ReadonlyArray<Record<string, unknown>>;
-
-// The desktop Agents glyph as a template image: SF Symbols has no equivalent.
-const AGENTS_HEADER_ICON: ImageSourcePropType = require("../../../assets/icons/agents.png");
 
 export function useThreadHeaderOptions(props: {
   readonly title: string;
@@ -33,7 +29,9 @@ export function useThreadHeaderOptions(props: {
     () =>
       withNativeGlassHeaderItem({
         accessibilityLabel: "Open agents",
-        icon: { templateSource: AGENTS_HEADER_ICON, type: "templateSource" as const },
+        // An SF Symbol, like its neighbours: image sources load asynchronously,
+        // so the bar briefly showed the label and then an oversized glyph.
+        icon: { name: "cpu", type: "sfSymbol" as const },
         identifier: "thread-right-agents",
         label: "Agents",
         onPress: props.onOpenAgents,
