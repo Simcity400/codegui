@@ -104,3 +104,15 @@ export function routeAgentNotificationResponseOnce(input: {
     input.navigate(deepLink);
   }
 }
+
+/**
+ * Foreground alerts announce other threads; the thread already on screen shows
+ * its own state, so repeating it as a banner is noise.
+ */
+export function shouldPresentForegroundAgentNotification(input: {
+  readonly notification: unknown;
+  readonly visiblePathname: string | null;
+}): boolean {
+  const deepLink = extractAgentNotificationDeepLink({ notification: input.notification });
+  return deepLink === null || deepLink !== input.visiblePathname;
+}

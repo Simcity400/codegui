@@ -38,7 +38,7 @@ import {
 import type { AgentActivityProps } from "../../widgets/AgentActivity";
 import { getAgentLiveActivities, startAgentLiveActivity } from "./agentLiveActivity";
 import { resolveCloudPublicConfig } from "../cloud/publicConfig";
-import { supportsAgentAwarenessPush } from "./capabilities";
+import { supportsAgentAwarenessPush, usesDirectApplePush } from "./capabilities";
 import { makeRelayDeviceRegistrationRequest, resolveApsEnvironment } from "./registrationPayload";
 
 const REMOTE_ACTIVITY_REGISTRATION_RETRY_MS = 15_000;
@@ -174,6 +174,7 @@ export function setAgentAwarenessRelayTokenProvider(
   provider: (() => Promise<string | null>) | null,
   identity?: string,
 ): void {
+  if (usesDirectApplePush()) return;
   const isExistingIdentity =
     provider !== null &&
     !shouldRegisterAgentAwarenessDeviceForProvider(relayTokenProviderIdentity, identity);
@@ -499,6 +500,7 @@ export function armAgentAwarenessLiveActivityForLocalWork(input: {
   readonly threadTitle: string;
   readonly projectTitle: string;
 }): void {
+  if (usesDirectApplePush()) return;
   if (!canRegisterRemoteLiveActivities() || !relayTokenProvider) {
     return;
   }

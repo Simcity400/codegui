@@ -83,6 +83,10 @@ jobs:
             packages/client-runtime/src/state/agentTranscripts.test.ts \
             packages/client-runtime/src/state/subagentPresentation.test.ts \
             apps/mobile/src/features/agents/agentListRows.test.ts \
+            apps/mobile/src/features/agent-awareness/directRegistration.test.ts \
+            apps/mobile/src/features/agent-awareness/notificationNavigation.test.ts \
+            apps/server/src/notifications/DirectPush.test.ts \
+            apps/server/src/notifications/directPushState.test.ts \
             apps/server/src/provider/Layers/CodexAdapter.test.ts \
             apps/server/src/provider/Layers/ClaudeAdapter.test.ts \
             apps/server/src/orchestration/Layers/ProviderRuntimeIngestion.test.ts \

@@ -89,6 +89,7 @@ import * as StorageCleanup from "./storageCleanup.ts";
 import * as PullRequestSyncReactor from "./orchestration/PullRequestSyncReactor.ts";
 import * as ThreadPullRequestReactor from "./orchestration/ThreadPullRequestReactor.ts";
 import * as AgentAwarenessRelay from "./relay/AgentAwarenessRelay.ts";
+import * as DirectPush from "./notifications/DirectPush.ts";
 import { hasCloudPublicConfig } from "./cloud/publicConfig.ts";
 import { ProviderRegistryLive } from "./provider/Layers/ProviderRegistry.ts";
 import * as ServerSettings from "./serverSettings.ts";
@@ -577,6 +578,7 @@ export const makeRoutesLayer = Layer.mergeAll(
       Layer.provide(orchestrationHttpApiLayer),
       Layer.provide(pullRequestHttpApiLayer),
       Layer.provide(serverEnvironmentHttpApiLayer),
+      Layer.provide(DirectPush.httpLayer),
       Layer.provide(environmentAuthenticatedAuthLayer),
     ),
     otlpTracesProxyRouteLayer,
@@ -591,6 +593,7 @@ export const makeRoutesLayer = Layer.mergeAll(
   // Both transports consume the same service instance, so caches single-flight across clients
   // and mutations observed on WebSocket invalidate patches subsequently read over HTTP.
   Layer.provide(PullRequestServiceLive),
+  Layer.provide(DirectPush.layer),
   Layer.provide(PreviewAutomationBroker.layer),
   Layer.provide(ServerSelfUpdate.layer.pipe(Layer.provide(DesktopAppUpdateLayerLive))),
   Layer.provide(commandReadinessLayer),

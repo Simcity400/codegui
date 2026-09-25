@@ -33,7 +33,10 @@ import {
   type RenderFailureProps,
 } from "./components/RenderErrorBoundary";
 import { ArchivedThreadsRouteScreen } from "./features/archive/ArchivedThreadsRouteScreen";
-import { useAgentNotificationNavigation } from "./features/agent-awareness/notificationNavigation";
+import {
+  useAgentNotificationNavigation,
+  useForegroundAgentNotifications,
+} from "./features/agent-awareness/notificationNavigation";
 import { ConnectOnboardingRouteScreen } from "./features/cloud/ConnectOnboardingRouteScreen";
 import { useConnectOnboardingNavigation } from "./features/cloud/connectOnboardingNavigation";
 import { AttachmentFileScreen } from "./features/files/AttachmentFileScreen";
@@ -544,6 +547,7 @@ function RootStackLayout(props: {
   const path = getPathFromState(props.state, navigationPathConfig);
   const pathname = path.startsWith("/") ? path : `/${path}`;
   const workspaceLocation = workspaceLocationFromState(props.state);
+  useForegroundAgentNotifications(workspaceLocation.pathname);
 
   return (
     <HardwareKeyboardCommandProvider pathname={pathname}>

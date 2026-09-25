@@ -6,6 +6,7 @@ import { consumeLastAgentNotificationResponse } from "./notificationResponseCons
 import {
   extractAgentNotificationDeepLink,
   routeAgentNotificationResponseOnce,
+  shouldPresentForegroundAgentNotification,
 } from "./notificationPayload";
 
 function responseWithData(data: Record<string, unknown>, identifier = "notification-1") {
@@ -175,5 +176,39 @@ describe("routeAgentNotificationResponseOnce", () => {
     });
 
     expect(navigations).toEqual(["/threads/env/thread"]);
+  });
+});
+
+describe("shouldPresentForegroundAgentNotification", () => {
+  const { notification } = responseWithData({ environmentId: "env", threadId: "thread" });
+
+  it("presents alerts for threads other than the one on screen", () => {
+    expect(
+      shouldPresentForegroundAgentNotification({
+        notification,
+        visiblePathname: "/threads/env/other",
+      }),
+    ).toBe(true);
+    expect(shouldPresentForegroundAgentNotification({ notification, visiblePathname: "/" })).toBe(
+      true,
+    );
+  });
+
+  it("stays quiet for the thread already on screen", () => {
+    expect(
+      shouldPresentForegroundAgentNotification({
+        notification,
+        visiblePathname: "/threads/env/thread",
+      }),
+    ).toBe(false);
+  });
+
+  it("presents alerts that do not name a thread", () => {
+    expect(
+      shouldPresentForegroundAgentNotification({
+        notification: responseWithData({}).notification,
+        visiblePathname: "/threads/env/thread",
+      }),
+    ).toBe(true);
   });
 });

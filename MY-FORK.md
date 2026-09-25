@@ -3,6 +3,9 @@
 This fork follows T3 Code with these personal additions:
 
 - Subagent panel and transcripts, with a dedicated mobile view.
+- Personal iPhone notifications and Live Activities sent directly from your T3 server
+  (see `docs/operations/personal-iphone-push.md`). The official relay cannot sign pushes
+  for this fork's bundle ID.
 - Personal Windows x64/ARM64 updates and iPhone preview releases.
 - Automatic nightly integration and an in-app action to resolve blocked merges.
 

@@ -2,7 +2,10 @@ import { useEffect, useRef } from "react";
 import * as Notifications from "expo-notifications";
 import { useLinkTo } from "@react-navigation/native";
 
-import { routeAgentNotificationResponseOnce } from "./notificationPayload";
+import {
+  routeAgentNotificationResponseOnce,
+  shouldPresentForegroundAgentNotification,
+} from "./notificationPayload";
 import { consumeLastAgentNotificationResponse } from "./notificationResponseConsumer";
 
 export function useAgentNotificationNavigation(): void {
@@ -29,4 +32,33 @@ export function useAgentNotificationNavigation(): void {
       subscription.remove();
     };
   }, [linkTo]);
+}
+
+let visiblePathname: string | null = null;
+
+/** Presents agent alerts while the app is open, except for the thread on screen. */
+export function useForegroundAgentNotifications(pathname: string): void {
+  useEffect(() => {
+    visiblePathname = pathname;
+  }, [pathname]);
+
+  useEffect(() => {
+    Notifications.setNotificationHandler({
+      handleNotification: async (notification) => {
+        const present = shouldPresentForegroundAgentNotification({
+          notification,
+          visiblePathname,
+        });
+        return {
+          shouldShowBanner: present,
+          shouldShowList: present,
+          shouldPlaySound: present,
+          shouldSetBadge: false,
+        };
+      },
+    });
+    return () => {
+      Notifications.setNotificationHandler(null);
+    };
+  }, []);
 }
