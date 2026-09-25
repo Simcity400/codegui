@@ -1,15 +1,23 @@
 import type { LegendListRef } from "@legendapp/list/react";
 import {
   deriveAgentTranscriptTurn,
+  mergeAgentMessages,
   selectAgentTranscript,
 } from "@t3tools/client-runtime/state/agent-transcripts";
-import type { OrchestrationMessage, OrchestrationThreadActivity } from "@t3tools/contracts";
+import { createEnvironmentRpcQueryAtomFamily } from "@t3tools/client-runtime/state/runtime";
+import {
+  ORCHESTRATION_WS_METHODS,
+  type OrchestrationMessage,
+  type OrchestrationThreadActivity,
+} from "@t3tools/contracts";
 import type { RuntimeSubagent } from "@t3tools/client-runtime/state/subagentRuntime";
 import { ChevronDownIcon } from "lucide-react";
 import { useMemo, useRef, useState, type ComponentProps } from "react";
 import * as Option from "effect/Option";
 import { threadHasOlderTurns } from "@t3tools/client-runtime/state/threads";
 import type { EnvironmentId, ThreadId } from "@t3tools/contracts";
+import { connectionAtomRuntime } from "../../connection/runtime";
+import { useEnvironmentQuery } from "../../state/query";
 import { useEnvironmentThread } from "../../state/threads";
 
 import { deriveTimelineEntries, deriveWorkLogEntries } from "../../session-logic";
@@ -109,6 +117,15 @@ export function AgentTranscript({
 const EMPTY_MESSAGES: readonly OrchestrationMessage[] = [];
 const EMPTY_ACTIVITIES: readonly OrchestrationThreadActivity[] = [];
 
+// Thread pages leave finished subagent messages out; the transcript loads them
+// each time it opens and overlays the live rows.
+const agentMessagesAtom = createEnvironmentRpcQueryAtomFamily(connectionAtomRuntime, {
+  label: "environment-data:orchestration:agent-messages",
+  tag: ORCHESTRATION_WS_METHODS.getAgentMessages,
+  staleTimeMs: 0,
+  idleTtlMs: 60_000,
+});
+
 type ScopedAgentTranscriptProps = Omit<
   AgentTranscriptProps,
   "messages" | "activities" | "historyPending"
@@ -118,9 +135,9 @@ type ScopedAgentTranscriptProps = Omit<
 };
 
 /**
- * Renders the agent's transcript from the thread's loaded rows. Subagent
- * messages and tool calls stream on the root thread, so reading them there
- * avoids a second subscription per transcript.
+ * Renders the agent's transcript: its stored messages plus the thread's loaded
+ * rows. Subagent messages and tool calls stream on the root thread, so reading
+ * them there avoids a second subscription per transcript.
  */
 export function ScopedAgentTranscript({
   environmentId,
@@ -130,12 +147,20 @@ export function ScopedAgentTranscript({
 }: ScopedAgentTranscriptProps) {
   const state = useEnvironmentThread(environmentId, threadId);
   const thread = Option.getOrNull(state.data);
+  const stored = useEnvironmentQuery(
+    agentMessagesAtom({ environmentId, input: { threadId, agentId: agent.id } }),
+  );
+  const liveMessages = thread?.messages ?? EMPTY_MESSAGES;
+  const messages = useMemo(
+    () => mergeAgentMessages(stored.data?.messages ?? null, liveMessages, agent.id),
+    [stored.data, liveMessages, agent.id],
+  );
   return (
     <AgentTranscript
       agent={agent}
-      messages={thread?.messages ?? EMPTY_MESSAGES}
+      messages={messages}
       activities={thread?.activities ?? EMPTY_ACTIVITIES}
-      historyPending={threadHasOlderTurns(state)}
+      historyPending={threadHasOlderTurns(state) || stored.isPending}
       {...props}
     />
   );

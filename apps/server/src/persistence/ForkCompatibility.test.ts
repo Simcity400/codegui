@@ -16,6 +16,15 @@ layer("fork compatibility", (it) => {
       assert.isTrue(columns.some((column) => column.name === "forked_from_thread_id"));
       assert.isTrue(columns.some((column) => column.name === "side_chat_promoted_at"));
       assert.isTrue(columns.some((column) => column.name === "goal_json"));
+      // Agent transcripts read one agent's messages through this index.
+      const plan = yield* sql<{ detail: string }>`EXPLAIN QUERY PLAN
+        SELECT message_id FROM projection_thread_messages
+        WHERE thread_id = 'thread' AND agent_id = 'agent' ORDER BY created_at`;
+      assert.isTrue(
+        plan.some((row) =>
+          row.detail.includes("idx_projection_thread_messages_thread_agent_created"),
+        ),
+      );
       assert.deepEqual(yield* runMigrations(), []);
     }),
   );

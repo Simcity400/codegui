@@ -44,6 +44,28 @@ export function isAgentMessage(message: Pick<OrchestrationMessage, "agentId">): 
   return typeof message.agentId === "string" && message.agentId.trim().length > 0;
 }
 
+/**
+ * One agent's messages: its stored transcript (orchestration.getAgentMessages)
+ * overlaid with the rows the live thread holds for it. Thread pages carry only
+ * streaming subagent messages, so a live row is always the newer copy.
+ */
+export function mergeAgentMessages(
+  stored: readonly OrchestrationMessage[] | null,
+  live: readonly OrchestrationMessage[],
+  agentId: string,
+): readonly OrchestrationMessage[] {
+  const liveRows = live.filter((message) => message.agentId === agentId);
+  if (stored === null || stored.length === 0) return liveRows;
+  // The server returns stored rows in order; only an overlay needs a re-sort.
+  if (liveRows.length === 0) return stored;
+  const liveIds = new Set(liveRows.map((message) => message.id));
+  // ISO timestamps and ids compare correctly as plain strings, matching SQLite.
+  const order = (left: string, right: string) => (left < right ? -1 : left > right ? 1 : 0);
+  return [...stored.filter((message) => !liveIds.has(message.id)), ...liveRows].sort(
+    (left, right) => order(left.createdAt, right.createdAt) || order(left.id, right.id),
+  );
+}
+
 /** Select stored agent content from the loaded history window for ordinary transcript renderers. */
 export function selectAgentTranscript(
   messages: readonly OrchestrationMessage[],

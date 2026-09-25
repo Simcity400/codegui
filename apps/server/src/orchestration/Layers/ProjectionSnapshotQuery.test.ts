@@ -30,6 +30,7 @@ import * as ThreadPlanProgress from "../ThreadPlanProgress.ts";
 import { ProjectionSnapshotQuery } from "../Services/ProjectionSnapshotQuery.ts";
 import { encodeThreadDetailPageCursor } from "../threadDetailCursor.ts";
 import { projectThreadDetailSnapshot } from "../ActivityPayloadProjection.ts";
+import { listAgentMessages } from "../agentMessages.ts";
 import { makeSqlStatementCounter } from "../../../integration/SqlStatementCounter.integration.ts";
 
 const asProjectId = (value: string): ProjectId => ProjectId.make(value);
@@ -2672,6 +2673,42 @@ projectionSnapshotLayer("ProjectionSnapshotQuery windowed thread detail", (it) =
         assert.notEqual(snapshot.value.page?.beforeCursor, null);
         assert.equal(snapshot.value.page?.snapshotSequence, 42);
       }
+    }),
+  );
+
+  it.effect("leaves finished subagent messages to their transcript query", () =>
+    Effect.gen(function* () {
+      yield* seedFanOutThread();
+      const sql = yield* SqlClient.SqlClient;
+      const at = "2026-03-01T00:04:00.000Z";
+      yield* sql`
+        INSERT INTO projection_thread_messages (
+          message_id, thread_id, turn_id, role, text, agent_id, is_streaming, created_at, updated_at
+        )
+        VALUES
+          ('agent-a-done', 'thread-w', 'turn-5', 'assistant', 'finished', 'agent-a', 0, ${at}, ${at}),
+          ('agent-a-live', 'thread-w', 'turn-5', 'assistant', 'still going', 'agent-a', 1, ${at}, ${at}),
+          ('agent-b-done', 'thread-w', 'turn-5', 'assistant', 'other agent', 'agent-b', 0, ${at}, ${at})
+      `;
+      const snapshotQuery = yield* ProjectionSnapshotQuery;
+
+      const page = yield* snapshotQuery.getThreadDetailSnapshot(threadW, { turnLimit: 2 });
+      assert.equal(page._tag, "Some");
+      if (page._tag === "Some") {
+        const ids = messageIds(page.value);
+        assert.include(ids, "agent-a-live");
+        assert.notInclude(ids, "agent-a-done");
+        assert.notInclude(ids, "agent-b-done");
+      }
+
+      const transcript = yield* listAgentMessages(sql, { threadId: threadW, agentId: "agent-a" });
+      assert.deepEqual(
+        transcript.map((message) => [message.id, message.agentId, message.streaming]),
+        [
+          ["agent-a-done", "agent-a", false],
+          ["agent-a-live", "agent-a", true],
+        ],
+      );
     }),
   );
 

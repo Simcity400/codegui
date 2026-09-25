@@ -1819,6 +1819,10 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
               AND created_at < ${beforeAnchorAt}
             )
           )
+          -- A finished subagent message is transcript-only and loads through
+          -- orchestration.getAgentMessages; subagents can write many times the parent's
+          -- messages. Streaming ones stay so live deltas extend a known row.
+          AND (agent_id IS NULL OR is_streaming = 1)
         ORDER BY created_at ASC, message_id ASC
       `,
   });

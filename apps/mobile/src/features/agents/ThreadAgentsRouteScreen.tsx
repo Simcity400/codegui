@@ -2,8 +2,10 @@ import type { LegendListRef } from "@legendapp/list/react-native";
 import { useNavigation, type StaticScreenProps } from "@react-navigation/native";
 import {
   deriveAgentTranscriptTurn,
+  mergeAgentMessages,
   selectAgentTranscript,
 } from "@t3tools/client-runtime/state/agent-transcripts";
+import { createEnvironmentRpcQueryAtomFamily } from "@t3tools/client-runtime/state/runtime";
 import {
   backgroundTaskTypeLabel,
   formatSubagentElapsed,
@@ -22,7 +24,7 @@ import {
   requestOlderThreadTurns,
   threadHasOlderTurns,
 } from "@t3tools/client-runtime/state/threads";
-import { EnvironmentId, ThreadId } from "@t3tools/contracts";
+import { EnvironmentId, ORCHESTRATION_WS_METHODS, ThreadId } from "@t3tools/contracts";
 import * as Option from "effect/Option";
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { FlatList, Pressable, View } from "react-native";
@@ -34,10 +36,12 @@ import { AppText as Text } from "../../components/AppText";
 import { BotIcon } from "../../components/BotIcon";
 import { EmptyState } from "../../components/EmptyState";
 import { LoadingScreen } from "../../components/LoadingScreen";
+import { connectionAtomRuntime } from "../../connection/runtime";
 import { cn } from "../../lib/cn";
 import { buildThreadFeed } from "../../lib/threadActivity";
 import { NativeStackScreenOptions } from "../../native/StackHeader";
 import { useRemoteEnvironmentRuntime } from "../../state/use-remote-environment-registry";
+import { useEnvironmentQuery } from "../../state/query";
 import { useThreadDetail } from "../../state/use-thread-detail";
 import { useEnvironmentThread } from "../../state/threads";
 import { useProject } from "../../state/entities";
@@ -47,6 +51,15 @@ import { projectThreadContentPresentation } from "../threads/threadContentPresen
 import { buildAgentListRows } from "./agentListRows";
 
 type ThreadParams = { readonly environmentId: string; readonly threadId: string };
+
+// Thread pages leave finished subagent messages out; a transcript loads them
+// each time it opens and overlays the live rows.
+const agentMessagesAtom = createEnvironmentRpcQueryAtomFamily(connectionAtomRuntime, {
+  label: "environment-data:orchestration:agent-messages",
+  tag: ORCHESTRATION_WS_METHODS.getAgentMessages,
+  staleTimeMs: 0,
+  idleTtlMs: 60_000,
+});
 
 function useAgentThread(params: ThreadParams) {
   const environmentId = EnvironmentId.make(params.environmentId);
@@ -353,11 +366,19 @@ export function ThreadAgentTranscriptRouteScreen(
     detailDeleted: scopedState.status === "deleted",
     connectionState: runtime?.connectionState ?? "available",
   });
-  const messages = scopedThread?.messages;
+  const stored = useEnvironmentQuery(
+    agentMessagesAtom({ environmentId, input: { threadId, agentId } }),
+  );
+  const liveMessages = scopedThread?.messages;
   const activities = scopedThread?.activities;
   const scoped = useMemo(
-    () => selectAgentTranscript(messages ?? [], activities ?? [], agentId),
-    [messages, activities, agentId],
+    () =>
+      selectAgentTranscript(
+        mergeAgentMessages(stored.data?.messages ?? null, liveMessages ?? [], agentId),
+        activities ?? [],
+        agentId,
+      ),
+    [stored.data, liveMessages, activities, agentId],
   );
   const feed = useMemo(() => buildThreadFeed(scoped), [scoped]);
   const turn = useMemo(() => deriveAgentTranscriptTurn(scoped, agent), [scoped, agent]);

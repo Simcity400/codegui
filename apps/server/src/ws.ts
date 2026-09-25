@@ -94,6 +94,7 @@ import {
   projectActivityEvent,
   projectThreadDetailSnapshot,
 } from "./orchestration/ActivityPayloadProjection.ts";
+import { listAgentMessages } from "./orchestration/agentMessages.ts";
 import { makeThreadLiveEventCoalescer } from "./orchestration/ThreadLiveEventCoalescer.ts";
 import { makeLiveStreamBudget, type RetainedLiveItem } from "./orchestration/LiveStreamBudget.ts";
 import {
@@ -2343,6 +2344,21 @@ const makeWsRpcLayer = (
                 afterSnapshot,
               );
             }),
+            { "rpc.aggregate": "orchestration" },
+          ),
+        [ORCHESTRATION_WS_METHODS.getAgentMessages]: (input) =>
+          observeRpcEffect(
+            ORCHESTRATION_WS_METHODS.getAgentMessages,
+            listAgentMessages(sql, input).pipe(
+              Effect.map((messages) => ({ messages })),
+              Effect.mapError(
+                (cause) =>
+                  new OrchestrationGetSnapshotError({
+                    message: `Failed to load agent ${input.agentId} messages`,
+                    cause,
+                  }),
+              ),
+            ),
             { "rpc.aggregate": "orchestration" },
           ),
         [WS_METHODS.serverProbe]: (_input) =>

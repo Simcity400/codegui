@@ -10,6 +10,7 @@ import { describe, expect, it } from "vite-plus/test";
 import {
   deriveAgentTranscriptTurn,
   isAgentMessage,
+  mergeAgentMessages,
   selectAgentTranscript,
 } from "./agentTranscripts.ts";
 import { foldSubagentActivities } from "./subagentRuntime.ts";
@@ -40,6 +41,32 @@ function activity(id: string, payload: unknown): OrchestrationThreadActivity {
 }
 
 describe("agent transcripts", () => {
+  it("overlays the live thread's rows on the stored transcript in time order", () => {
+    const stored = [
+      message("done", "agent-a"),
+      { ...message("streaming", "agent-a"), text: "partial", streaming: true },
+    ];
+    const live = [
+      message("parent"),
+      message("other", "agent-b"),
+      {
+        ...message("streaming", "agent-a"),
+        text: "partial and more",
+        updatedAt: "2026-09-08T00:02:00.000Z",
+      },
+      { ...message("newer", "agent-a"), createdAt: "2026-09-08T00:01:00.000Z" },
+    ];
+    expect(mergeAgentMessages(stored, live, "agent-a").map((row) => [row.id, row.text])).toEqual([
+      ["done", "done"],
+      ["streaming", "partial and more"],
+      ["newer", "newer"],
+    ]);
+    expect(mergeAgentMessages(null, live, "agent-a").map((row) => row.id)).toEqual([
+      "streaming",
+      "newer",
+    ]);
+  });
+
   it("follows the agent's current turn and settles it without using the parent's lifecycle", () => {
     const agent = foldSubagentActivities([
       {

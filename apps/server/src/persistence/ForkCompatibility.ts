@@ -95,6 +95,11 @@ export const ensureForkColumns = Effect.fn("ensureForkColumns")(function* () {
       ) {
         yield* sql`ALTER TABLE projection_thread_messages ADD COLUMN agent_id TEXT`;
       }
+      // Agent transcripts read one agent's rows (orchestration/agentMessages.ts).
+      if (messageColumns.length > 0) {
+        yield* sql`CREATE INDEX IF NOT EXISTS idx_projection_thread_messages_thread_agent_created
+          ON projection_thread_messages (thread_id, agent_id, created_at)`;
+      }
       const threadColumns = yield* sql<{ name: string }>`PRAGMA table_info(projection_threads)`;
       if (threadColumns.length > 0) {
         if (!threadColumns.some((column) => column.name === "goal_json")) {

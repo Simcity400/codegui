@@ -41,6 +41,7 @@ export const ORCHESTRATION_WS_METHODS = {
   getArchivedShellSnapshot: "orchestration.getArchivedShellSnapshot",
   subscribeShell: "orchestration.subscribeShell",
   subscribeThread: "orchestration.subscribeThread",
+  getAgentMessages: "orchestration.getAgentMessages",
 } as const;
 
 export const ProviderApprovalPolicy = Schema.Literals([
@@ -2329,6 +2330,22 @@ export const OrchestrationSearchThreadsResult = Schema.Struct({
 });
 export type OrchestrationSearchThreadsResult = typeof OrchestrationSearchThreadsResult.Type;
 
+/**
+ * One subagent's stored messages. Thread pages leave out finished subagent
+ * messages (they can outnumber the parent's many times over), so transcripts
+ * load them here on demand.
+ */
+export const OrchestrationGetAgentMessagesInput = Schema.Struct({
+  threadId: ThreadId,
+  agentId: TrimmedNonEmptyString,
+});
+export type OrchestrationGetAgentMessagesInput = typeof OrchestrationGetAgentMessagesInput.Type;
+
+export const OrchestrationGetAgentMessagesResult = Schema.Struct({
+  messages: Schema.Array(OrchestrationMessage),
+});
+export type OrchestrationGetAgentMessagesResult = typeof OrchestrationGetAgentMessagesResult.Type;
+
 export const OrchestrationGetWorkflowScriptInput = Schema.Struct({
   threadId: ThreadId,
   /** Absolute path from the workflow's runHandles.scriptPath. The server
@@ -2409,6 +2426,10 @@ export const OrchestrationRpcSchemas = {
   subscribeShell: {
     input: OrchestrationSubscribeShellInput,
     output: OrchestrationShellStreamItem,
+  },
+  getAgentMessages: {
+    input: OrchestrationGetAgentMessagesInput,
+    output: OrchestrationGetAgentMessagesResult,
   },
 } as const;
 
