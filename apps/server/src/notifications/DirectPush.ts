@@ -39,6 +39,7 @@ import {
   directActivityMessage,
   directPushAggregate,
   directPushAlert,
+  directPushThread,
   type DirectPushThread,
 } from "./directPushState.ts";
 
@@ -140,7 +141,7 @@ export const layer = Layer.effect(
           project: project.value,
           thread: thread.value,
         });
-        return state ? { state, turnId: thread.value.latestTurn?.turnId ?? null } : null;
+        return state ? directPushThread(state, thread.value) : null;
       });
     const readSnapshot = Effect.gen(function* () {
       const snapshot = yield* snapshotQuery.getShellSnapshot();
@@ -150,7 +151,7 @@ export const layer = Layer.effect(
         const project = projects.get(thread.projectId);
         if (!project) continue;
         const state = projectThreadAwareness({ environmentId, project, thread });
-        if (state) result.set(thread.id, { state, turnId: thread.latestTurn?.turnId ?? null });
+        if (state) result.set(thread.id, directPushThread(state, thread));
       }
       return result;
     });
@@ -244,15 +245,19 @@ export const layer = Layer.effect(
           Effect.gen(function* () {
             const previous = threads.get(threadId);
             const next = yield* readThread(threadId);
-            if (next) threads.set(threadId, next);
-            else threads.delete(threadId);
+            // Like the relay's publish identity, only these fields count. Keep
+            // the previous state otherwise: settling a finished thread bumps
+            // its updatedAt, which would put a fresh Done row back on the card.
             if (
               previous?.turnId === next?.turnId &&
               previous?.state.phase === next?.state.phase &&
               previous?.state.threadTitle === next?.state.threadTitle &&
-              previous?.state.modelTitle === next?.state.modelTitle
+              previous?.state.modelTitle === next?.state.modelTitle &&
+              previous?.monitoring === next?.monitoring
             )
               return;
+            if (next) threads.set(threadId, next);
+            else threads.delete(threadId);
             const alert = directPushAlert(previous, next);
             const now = yield* Clock.currentTimeMillis;
             const aggregate = directPushAggregate(threads.values(), now);
@@ -273,7 +278,20 @@ export const layer = Layer.effect(
           }),
         )
         .pipe(Effect.catchCause(() => Effect.logWarning("Direct Apple push update failed.")));
-    const worker = yield* makeDrainableWorker(publish);
+    // Publishes queued or running per thread. A task that ends while its
+    // thread's turn-completion publish is still reading must still republish.
+    const publishing = new Map<ThreadId, number>();
+    const worker = yield* makeDrainableWorker((threadId: ThreadId) =>
+      publish(threadId).pipe(
+        Effect.ensuring(
+          Effect.sync(() => {
+            const count = (publishing.get(threadId) ?? 1) - 1;
+            if (count > 0) publishing.set(threadId, count);
+            else publishing.delete(threadId);
+          }),
+        ),
+      ),
+    );
     const events = yield* engine.subscribeDomainEvents;
     yield* seed.pipe(
       Effect.catchCause(() => Effect.logWarning("Direct Apple push initial snapshot failed.")),
@@ -281,9 +299,19 @@ export const layer = Layer.effect(
     yield* forkParked(
       Stream.runForEach(events, (event) => {
         const threadId = eventThreadId(event);
-        return threadId && shouldPublishAgentAwarenessEvent(event)
-          ? worker.enqueue(threadId)
-          : Effect.void;
+        if (!threadId) return Effect.void;
+        // Task starts and ends move a finished thread between Monitoring and
+        // Done; while its turn runs they cannot change the card.
+        const previous = threads.get(threadId);
+        const movesFinishedThread =
+          event.type === "thread.activity-appended" &&
+          event.payload.activity.kind.startsWith("task.") &&
+          (previous?.monitoring === true ||
+            previous?.state.phase === "completed" ||
+            publishing.has(threadId));
+        if (!shouldPublishAgentAwarenessEvent(event) && !movesFinishedThread) return Effect.void;
+        publishing.set(threadId, (publishing.get(threadId) ?? 0) + 1);
+        return worker.enqueue(threadId);
       }).pipe(
         Effect.catchCause(() => Effect.logError("Direct Apple push event subscription failed.")),
       ),
@@ -306,60 +334,66 @@ export const layer = Layer.effect(
     );
     return DirectPush.of({
       register: (principal, registration) =>
-        lock.withPermit(
-          Effect.gen(function* () {
-            if (registration.bundleId !== credentials.value.bundleId)
-              return {
-                configured: false,
-                aggregate: null,
-                deliveryError: "This server's Apple push key is configured for a different app.",
-              };
-            const snapshot = yield* readSnapshot.pipe(
-              Effect.mapError(
-                () => new DirectPushError({ message: "Could not read current agent activity." }),
-              ),
-            );
-            const key = deviceKey(principal.subject, registration.deviceId);
-            const previous = subscriptions.get(key);
-            // A native token can only belong to one device registration at a time.
-            for (const [otherKey, other] of subscriptions)
-              if (
-                otherKey !== key &&
-                registration.pushToken &&
-                other.registration.pushToken === registration.pushToken
-              )
-                subscriptions.delete(otherKey);
-            subscriptions.set(key, {
-              subject: principal.subject,
-              sessionId: principal.sessionId,
-              registration,
-            });
-            // Verify a new notification token with Apple without displaying a banner.
-            if (
-              registration.notificationsEnabled &&
-              registration.pushToken &&
-              (previous?.registration.pushToken !== registration.pushToken ||
-                !verifiedPushTokens.has(registration.pushToken) ||
-                errors.has(`${key}:alert`))
-            ) {
-              yield* deliver(key, {
-                kind: "background",
-                token: registration.pushToken,
-                environment: registration.apsEnvironment,
-                payload: { aps: { "content-available": 1 } },
-              });
-            }
-            const now = yield* Clock.currentTimeMillis;
-            const aggregate = directPushAggregate(snapshot.values(), now);
-            yield* deliverActivity(key, aggregate, now);
-            yield* persist();
-            return {
-              configured: true,
-              aggregate,
-              deliveryError:
-                errors.get(`${key}:alert`) ?? errors.get(`${key}:liveactivity`) ?? null,
-            };
-          }),
+        // Let the worker apply the events it has already received, so the
+        // aggregate is not behind a change the phone reacted to.
+        worker.drain.pipe(
+          Effect.timeoutOption("5 seconds"),
+          Effect.andThen(
+            lock.withPermit(
+              Effect.gen(function* () {
+                if (registration.bundleId !== credentials.value.bundleId)
+                  return {
+                    configured: false,
+                    aggregate: null,
+                    deliveryError:
+                      "This server's Apple push key is configured for a different app.",
+                  };
+                const key = deviceKey(principal.subject, registration.deviceId);
+                const previous = subscriptions.get(key);
+                // A native token can only belong to one device registration at a time.
+                for (const [otherKey, other] of subscriptions)
+                  if (
+                    otherKey !== key &&
+                    registration.pushToken &&
+                    other.registration.pushToken === registration.pushToken
+                  )
+                    subscriptions.delete(otherKey);
+                subscriptions.set(key, {
+                  subject: principal.subject,
+                  sessionId: principal.sessionId,
+                  registration,
+                });
+                // Verify a new notification token with Apple without displaying a banner.
+                if (
+                  registration.notificationsEnabled &&
+                  registration.pushToken &&
+                  (previous?.registration.pushToken !== registration.pushToken ||
+                    !verifiedPushTokens.has(registration.pushToken) ||
+                    errors.has(`${key}:alert`))
+                ) {
+                  yield* deliver(key, {
+                    kind: "background",
+                    token: registration.pushToken,
+                    environment: registration.apsEnvironment,
+                    payload: { aps: { "content-available": 1 } },
+                  });
+                }
+                // `threads` is kept current by the event worker, so registering
+                // never rebuilds the shell snapshot (a full read that also spawns
+                // git to resolve repository identities).
+                const now = yield* Clock.currentTimeMillis;
+                const aggregate = directPushAggregate(threads.values(), now);
+                yield* deliverActivity(key, aggregate, now);
+                yield* persist();
+                return {
+                  configured: true,
+                  aggregate,
+                  deliveryError:
+                    errors.get(`${key}:alert`) ?? errors.get(`${key}:liveactivity`) ?? null,
+                };
+              }),
+            ),
+          ),
         ),
       unregister: (subject, deviceId) =>
         lock.withPermit(

@@ -7,6 +7,27 @@ import * as DateTime from "effect/DateTime";
 export interface DirectPushThread {
   readonly state: AgentAwarenessState;
   readonly turnId: string | null;
+  /** The turn finished but background work (subagents, watch loops) is still live. */
+  readonly monitoring?: boolean;
+}
+
+/**
+ * Claude ends its turn while background subagents run and wakes up again when
+ * they report back, so a Done thread with live background work is still busy:
+ * it stays active on the card as Monitoring and does not alert until that work
+ * ends.
+ */
+export function directPushThread(
+  state: AgentAwarenessState,
+  thread: {
+    readonly latestTurn: { readonly turnId: string } | null;
+    readonly backgroundLiveness?: string | null | undefined;
+  },
+): DirectPushThread {
+  const turnId = thread.latestTurn?.turnId ?? null;
+  return state.phase === "completed" && thread.backgroundLiveness != null
+    ? { state: { ...state, phase: "running" }, turnId, monitoring: true }
+    : { state, turnId };
 }
 
 const terminal = (phase: AgentAwarenessState["phase"]) =>
@@ -30,14 +51,15 @@ export function directPushAggregate(
   threads: Iterable<DirectPushThread>,
   now: number,
 ): RelayAgentActivityAggregateState | null {
-  const states = [...threads].map((thread) => thread.state);
-  const active = states.filter((state) => !terminal(state.phase));
-  const recent = states.filter(
-    (state) =>
+  const all = [...threads];
+  const active = all.filter(({ state }) => !terminal(state.phase));
+  const recent = all.filter(
+    ({ state }) =>
       terminal(state.phase) && now - Date.parse(state.updatedAt) < DIRECT_PUSH_FINISHED_DISPLAY_MS,
   );
   const rows = [...active, ...recent].sort(
-    (a, b) => priority(a.phase) - priority(b.phase) || b.updatedAt.localeCompare(a.updatedAt),
+    ({ state: a }, { state: b }) =>
+      priority(a.phase) - priority(b.phase) || b.updatedAt.localeCompare(a.updatedAt),
   );
   if (rows.length === 0) return null;
   return {
@@ -45,14 +67,14 @@ export function directPushAggregate(
     subtitle: active.length ? "Agent work in progress" : "Agent work finished",
     activeCount: active.length,
     updatedAt: DateTime.formatIso(DateTime.makeUnsafe(now)),
-    activities: rows.slice(0, 4).map((state) => ({
+    activities: rows.slice(0, 4).map(({ state, monitoring }) => ({
       environmentId: state.environmentId,
       threadId: state.threadId,
       threadTitle: state.threadTitle,
       projectTitle: state.projectTitle,
       modelTitle: state.modelTitle,
       phase: state.phase,
-      status: status[state.phase],
+      status: monitoring ? "Monitoring" : status[state.phase],
       updatedAt: state.updatedAt,
       deepLink: state.deepLink,
     })),
@@ -76,14 +98,19 @@ export function directPushAlert(
           : state.phase === "waiting_for_input"
             ? "Input needed"
             : null;
-  return title
-    ? {
-        aps: { alert: { title, body: state.threadTitle }, sound: "default" },
-        environmentId: state.environmentId,
-        threadId: state.threadId,
-        deepLink: state.deepLink,
-      }
-    : null;
+  if (!title) return null;
+  const target = {
+    environmentId: state.environmentId,
+    threadId: state.threadId,
+    deepLink: state.deepLink,
+  };
+  return {
+    aps: { alert: { title, body: state.threadTitle }, sound: "default" },
+    ...target,
+    // expo-notifications reads a remote alert's data from `body` on iOS; without
+    // it a tap cannot find the thread to open.
+    body: target,
+  };
 }
 
 export function directActivityMessage(

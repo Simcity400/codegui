@@ -70,6 +70,16 @@ const registration: DirectPushRegistration = {
 };
 
 const encodeConfiguration = Schema.encodeEffect(Schema.fromJsonString(ApplePushConfiguration));
+const decodeCardStatus = Schema.decodeUnknownEffect(
+  Schema.fromJsonString(
+    Schema.Struct({ activities: Schema.Array(Schema.Struct({ status: Schema.String })) }),
+  ),
+);
+const decodeCardProps = Schema.decodeUnknownEffect(
+  Schema.fromJsonString(
+    Schema.Struct({ activities: Schema.Array(Schema.Struct({ threadId: Schema.String })) }),
+  ),
+);
 
 const dependencies = Layer.mergeAll(
   Layer.mock(ServerEnvironment, { getEnvironmentId: Effect.succeed(EnvironmentId.make("env-1")) }),
@@ -173,6 +183,37 @@ it.effect("surfaces an Apple rejection and retries when the device re-registers"
       }),
     );
     expect(send).toHaveBeenCalledTimes(2);
+  }),
+);
+it.effect("registers from tracked activity without re-reading the shell snapshot", () =>
+  Effect.gen(function* () {
+    let snapshotReads = 0;
+    const services = Layer.mergeAll(
+      dependencies,
+      Layer.mock(ProjectionSnapshotQuery, {
+        getShellSnapshot: () =>
+          Effect.sync(() => {
+            snapshotReads++;
+            return {
+              snapshotSequence: 0,
+              projects: [],
+              threads: [],
+              updatedAt: "2026-09-20T00:00:00.000Z",
+            };
+          }),
+      }),
+    );
+    yield* run(
+      Effect.gen(function* () {
+        const push = yield* DirectPush;
+        yield* push.register(principal, registration);
+        yield* push.register(principal, registration);
+      }),
+      true,
+      services,
+    );
+    // Only the startup seed reads the snapshot.
+    expect(snapshotReads).toBe(1);
   }),
 );
 it.effect("refuses a different app's bundle and does not use the configured key for it", () =>
@@ -310,6 +351,244 @@ it.effect("delivers completion from an actual orchestration event and later ends
         expect(send.mock.calls.filter(([message]) => message.kind === "background")).toHaveLength(
           2,
         );
+      }),
+      true,
+      services,
+    );
+  }),
+);
+
+it.effect("settling a long-finished thread does not put it back on the card", () =>
+  Effect.gen(function* () {
+    const events = yield* Queue.unbounded<OrchestrationEvent>();
+    const delivered = yield* Queue.unbounded<ApplePushMessage>();
+    const nowMs = (yield* DateTime.now).epochMilliseconds;
+    const iso = (ms: number) => DateTime.formatIso(DateTime.makeUnsafe(ms));
+    const now = iso(nowMs);
+    const finishedAt = iso(nowMs - 20 * 60_000);
+    const project: OrchestrationProjectShell = {
+      id: ProjectId.make("project-1"),
+      title: "Project",
+      workspaceRoot: "/workspace",
+      repositoryIdentity: null,
+      defaultModelSelection: null,
+      scripts: [],
+      createdAt: now,
+      updatedAt: now,
+    };
+    const shell = (id: string, state: "running" | "completed", updatedAt: string) => {
+      const threadId = ThreadId.make(id);
+      return {
+        id: threadId,
+        projectId: project.id,
+        title: id,
+        modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5.4" },
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        branch: null,
+        worktreePath: null,
+        pullRequests: [],
+        latestTurn: {
+          turnId: TurnId.make(`${id}-turn`),
+          state,
+          requestedAt: finishedAt,
+          startedAt: finishedAt,
+          completedAt: state === "completed" ? finishedAt : null,
+          assistantMessageId: null,
+        },
+        createdAt: finishedAt,
+        updatedAt,
+        archivedAt: null,
+        settledOverride: null,
+        settledAt: null,
+        session: null,
+        latestUserMessageAt: finishedAt,
+        hasPendingApprovals: false,
+        hasPendingUserInput: false,
+        hasActionableProposedPlan: false,
+      } satisfies OrchestrationThreadShell;
+    };
+    const shells = new Map<string, OrchestrationThreadShell>([
+      ["finished", shell("finished", "completed", finishedAt)],
+      ["working", shell("working", "running", now)],
+    ]);
+    const event = (id: string): OrchestrationEvent => ({
+      type: "thread.settled",
+      sequence: 1,
+      eventId: EventId.make(`evt-${id}`),
+      commandId: CommandId.make(`cmd-${id}`),
+      aggregateKind: "thread",
+      aggregateId: ThreadId.make(id),
+      causationEventId: null,
+      correlationId: null,
+      payload: { threadId: ThreadId.make(id), settledAt: now, updatedAt: now },
+      occurredAt: now,
+      metadata: {},
+    });
+    const services = Layer.mergeAll(
+      dependencies,
+      Layer.mock(ProjectionSnapshotQuery, {
+        getShellSnapshot: () =>
+          Effect.sync(() => ({
+            snapshotSequence: 0,
+            projects: [project],
+            threads: [...shells.values()],
+            updatedAt: now,
+          })),
+        getThreadShellById: (threadId) =>
+          Effect.sync(() => Option.fromNullishOr(shells.get(threadId))),
+        getProjectShellById: () => Effect.succeed(Option.some(project)),
+      }),
+      Layer.mock(OrchestrationEngineService, {
+        subscribeDomainEvents: Effect.succeed(Stream.fromQueue(events)),
+      }),
+    );
+    yield* run(
+      Effect.gen(function* () {
+        const push = yield* DirectPush;
+        yield* push.register(principal, { ...registration, activityPushToken: "b".repeat(64) });
+        send.mockImplementation((message) =>
+          // oxlint-disable-next-line t3code/no-manual-effect-runtime-in-tests -- Mock the Promise-based APNs transport boundary.
+          Effect.runPromise(
+            Queue.offer(delivered, message).pipe(
+              Effect.as({ ok: true, status: 200, reason: null }),
+            ),
+          ),
+        );
+        // Settling only bumps updatedAt; the working thread then finishes.
+        shells.set("finished", { ...shells.get("finished")!, updatedAt: now });
+        yield* Queue.offer(events, event("finished"));
+        shells.set("working", shell("working", "completed", now));
+        yield* Queue.offer(events, event("working"));
+        const card = yield* Queue.take(delivered);
+        expect(card).toMatchObject({ kind: "liveactivity" });
+        const props = yield* decodeCardProps(
+          (card.payload as { aps: { "content-state": { props: string } } }).aps["content-state"]
+            .props,
+        );
+        expect(props.activities.map((row) => row.threadId)).toEqual(["working"]);
+      }),
+      true,
+      services,
+    );
+  }),
+);
+
+it.effect("a finished background task moves a Monitoring thread to Done", () =>
+  Effect.gen(function* () {
+    const events = yield* Queue.unbounded<OrchestrationEvent>();
+    const delivered = yield* Queue.unbounded<ApplePushMessage>();
+    const now = DateTime.formatIso(yield* DateTime.now);
+    const threadId = ThreadId.make("thread-1");
+    const project: OrchestrationProjectShell = {
+      id: ProjectId.make("project-1"),
+      title: "Project",
+      workspaceRoot: "/workspace",
+      repositoryIdentity: null,
+      defaultModelSelection: null,
+      scripts: [],
+      createdAt: now,
+      updatedAt: now,
+    };
+    let thread: OrchestrationThreadShell = {
+      id: threadId,
+      projectId: project.id,
+      title: "Task",
+      modelSelection: { instanceId: ProviderInstanceId.make("claude"), model: "opus" },
+      runtimeMode: "full-access",
+      interactionMode: "default",
+      branch: null,
+      worktreePath: null,
+      pullRequests: [],
+      latestTurn: {
+        turnId: TurnId.make("turn-1"),
+        state: "completed",
+        requestedAt: now,
+        startedAt: now,
+        completedAt: now,
+        assistantMessageId: null,
+      },
+      createdAt: now,
+      updatedAt: now,
+      archivedAt: null,
+      settledOverride: null,
+      settledAt: null,
+      session: null,
+      latestUserMessageAt: now,
+      hasPendingApprovals: false,
+      hasPendingUserInput: false,
+      hasActionableProposedPlan: false,
+      backgroundLiveness: "working",
+    };
+    const services = Layer.mergeAll(
+      dependencies,
+      Layer.mock(ProjectionSnapshotQuery, {
+        getShellSnapshot: () =>
+          Effect.sync(() => ({
+            snapshotSequence: 0,
+            projects: [project],
+            threads: [thread],
+            updatedAt: now,
+          })),
+        getThreadShellById: () => Effect.sync(() => Option.some(thread)),
+        getProjectShellById: () => Effect.succeed(Option.some(project)),
+      }),
+      Layer.mock(OrchestrationEngineService, {
+        subscribeDomainEvents: Effect.succeed(Stream.fromQueue(events)),
+      }),
+    );
+    yield* run(
+      Effect.gen(function* () {
+        const push = yield* DirectPush;
+        const registered = yield* push.register(principal, {
+          ...registration,
+          activityPushToken: "b".repeat(64),
+        });
+        expect(registered.aggregate?.activities[0]?.status).toBe("Monitoring");
+        send.mockImplementation((message) =>
+          // oxlint-disable-next-line t3code/no-manual-effect-runtime-in-tests -- Mock the Promise-based APNs transport boundary.
+          Effect.runPromise(
+            Queue.offer(delivered, message).pipe(
+              Effect.as({ ok: true, status: 200, reason: null }),
+            ),
+          ),
+        );
+        thread = { ...thread, backgroundLiveness: null };
+        yield* Queue.offer(events, {
+          type: "thread.activity-appended",
+          sequence: 1,
+          eventId: EventId.make("evt-task"),
+          commandId: CommandId.make("cmd-task"),
+          aggregateKind: "thread",
+          aggregateId: threadId,
+          causationEventId: null,
+          correlationId: null,
+          payload: {
+            threadId,
+            activity: {
+              id: EventId.make("activity-task"),
+              tone: "info",
+              kind: "task.completed",
+              summary: "Task completed",
+              payload: { taskId: "task-1" },
+              turnId: null,
+              createdAt: now,
+            },
+          },
+          occurredAt: now,
+          metadata: {},
+        });
+        const card = yield* Queue.take(delivered);
+        expect(card).toMatchObject({ kind: "liveactivity" });
+        const props = yield* decodeCardStatus(
+          (card.payload as { aps: { "content-state": { props: string } } }).aps["content-state"]
+            .props,
+        );
+        expect(props.activities.map((row) => row.status)).toEqual(["Done"]);
+        expect(yield* Queue.take(delivered)).toMatchObject({
+          kind: "alert",
+          payload: { aps: { alert: { title: "Agent finished" } } },
+        });
       }),
       true,
       services,

@@ -5,6 +5,7 @@ import {
   directActivityMessage,
   directPushAggregate,
   directPushAlert,
+  directPushThread,
   type DirectPushThread,
 } from "./directPushState.ts";
 
@@ -37,6 +38,20 @@ const device: DirectPushRegistration = {
 };
 
 describe("direct Apple push payloads", () => {
+  it("keeps a finished turn with live background work on the card as Monitoring", () => {
+    const done = thread("completed");
+    const latestTurn = { turnId: "turn-1" };
+    const monitoring = directPushThread(done.state, { latestTurn, backgroundLiveness: "working" });
+    expect(directPushAggregate([monitoring], now)).toMatchObject({
+      activeCount: 1,
+      activities: [{ phase: "running", status: "Monitoring" }],
+    });
+    // No "finished" alert while it waits; one when the background work ends.
+    expect(directPushAlert(thread("running"), monitoring)).toBeNull();
+    const finished = directPushThread(done.state, { latestTurn, backgroundLiveness: null });
+    expect(directPushAlert(monitoring, finished)?.aps.alert.title).toBe("Agent finished");
+    expect(directPushAggregate([finished], now)?.activities[0]?.status).toBe("Done");
+  });
   it("alerts once for completion, failure, approval and input transitions", () => {
     for (const phase of [
       "completed",
@@ -51,6 +66,13 @@ describe("direct Apple push payloads", () => {
       expect(directPushAlert(undefined, next)?.aps.sound).toBe("default");
     }
     expect(directPushAlert(thread("starting"), thread("running"))).toBeNull();
+  });
+  it("carries the thread where the iPhone app reads a tapped alert's data", () => {
+    expect(directPushAlert(thread("running"), thread("completed"))?.body).toEqual({
+      environmentId: "env-1",
+      threadId: "thread-1",
+      deepLink: "/threads/env-1/thread-1",
+    });
   });
   it("allows the same terminal phase on a later turn", () => {
     expect(directPushAlert(thread("completed"), thread("completed", "turn-2"))).not.toBeNull();
