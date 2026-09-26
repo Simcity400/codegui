@@ -51,14 +51,16 @@ jobs:
       tag: ${{ steps.release_meta.outputs.tag }}
       name: ${{ steps.release_meta.outputs.name }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           ref: ${{ inputs.ref || github.sha }}
+          # Install scripts run next; only the tag push below gets the write token.
+          persist-credentials: false
           sparse-checkout: |
             /*
             !/.repos/
           sparse-checkout-cone-mode: false
-      - uses: voidzero-dev/setup-vp@v1
+      - uses: voidzero-dev/setup-vp@250f29ce396baf5e8f24498e17c0dfdebabc26eb # v1
         with:
           node-version-file: package.json
           cache: true
@@ -76,7 +78,11 @@ jobs:
         name: Tag the checked source before main can advance during packaging
         env:
           RELEASE_TAG: ${{ steps.release_meta.outputs.tag }}
-        run: node scripts/pin-release-tag.ts
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          git config --local http.https://github.com/.extraheader \
+            "AUTHORIZATION: basic $(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)"
+          node scripts/pin-release-tag.ts
 
   build:
     name: Build Windows ${{ matrix.arch }}
@@ -106,7 +112,7 @@ jobs:
       T3CODE_RELAY_URL: https://relay.t3.codes
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           ref: ${{ inputs.ref != '' && inputs.ref || github.sha }}
           sparse-checkout: |
@@ -115,7 +121,7 @@ jobs:
           sparse-checkout-cone-mode: false
 
       - name: Setup Vite+
-        uses: voidzero-dev/setup-vp@v1
+        uses: voidzero-dev/setup-vp@250f29ce396baf5e8f24498e17c0dfdebabc26eb # v1
         with:
           node-version-file: package.json
           cache: true
@@ -126,7 +132,7 @@ jobs:
               - --filter=@t3tools/scripts...
 
       - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
         with:
           targets: ${{ matrix.rust_target }}
 
@@ -169,7 +175,7 @@ jobs:
           ls -la release-publish
 
       - name: Upload desktop artifact
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: desktop-win-${{ matrix.arch }}
           path: release-publish/*
@@ -186,16 +192,18 @@ jobs:
       contents: write
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           ref: ${{ inputs.ref != '' && inputs.ref || github.sha }}
+          # Release writes receive the token explicitly; install scripts never see it.
+          persist-credentials: false
           sparse-checkout: |
             /*
             !/.repos/
           sparse-checkout-cone-mode: false
 
       - name: Setup Vite+
-        uses: voidzero-dev/setup-vp@v1
+        uses: voidzero-dev/setup-vp@250f29ce396baf5e8f24498e17c0dfdebabc26eb # v1
         with:
           node-version-file: package.json
           cache: true
@@ -204,7 +212,7 @@ jobs:
               - --filter=@t3tools/scripts...
 
       - name: Download desktop artifacts
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           pattern: desktop-win-*
           merge-multiple: true
@@ -242,7 +250,7 @@ jobs:
 
       - name: Upload draft release
         id: upload
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
         with:
           tag_name: ${{ needs.prepare.outputs.tag }}
           # The verified existing tag owns the source. Using the current branch

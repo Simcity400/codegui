@@ -97,12 +97,31 @@ export function hasReleaseChanges(
     .some((path) => path !== "" && !path.endsWith(".md"));
 }
 
-/** Runs only in the clean CI checkout; real code conflicts remain unresolved. */
-export function syncNightly(cwd: string, upstream: string, tag: string): string {
+/**
+ * Runs only in the clean CI checkout; real code conflicts remain unresolved.
+ * `expected` is the commit the check job saw, so a tag moved in between is refused.
+ */
+export function syncNightly(cwd: string, upstream: string, tag: string, expected?: string): string {
   if (!nightlyTag.test(tag)) throw new Error("Invalid official nightly tag.");
   if (git(cwd, "status", "--porcelain")) throw new Error("Nightly sync requires a clean checkout.");
-  git(cwd, "fetch", "--no-tags", upstream, `refs/tags/${tag}`);
-  const commit = git(cwd, "rev-parse", "FETCH_HEAD^{commit}");
+  git(
+    cwd,
+    "fetch",
+    "--no-tags",
+    upstream,
+    `+refs/tags/${tag}:refs/fork-sync/tag`,
+    "+refs/heads/main:refs/fork-sync/main",
+  );
+  const commit = git(cwd, "rev-parse", "refs/fork-sync/tag^{commit}");
+  if (expected !== undefined && commit !== expected)
+    throw new Error(`Official ${tag} moved from ${expected} to ${commit} since it was checked.`);
+  const onMain =
+    NodeChildProcess.spawnSync(
+      "git",
+      ["merge-base", "--is-ancestor", commit, "refs/fork-sync/main"],
+      { cwd, stdio: "ignore" },
+    ).status === 0;
+  if (!onMain) throw new Error(`Official ${tag} is not on the official main branch.`);
   try {
     const merge = NodeChildProcess.spawnSync(
       "git",
@@ -243,6 +262,10 @@ if (import.meta.main) {
     );
     output("ref", git(cwd, "rev-parse", "HEAD"));
     output("tag", upstream.tag_name);
+    output(
+      "commit",
+      resolveTagCommit("https://github.com/pingdotgg/t3code.git", upstream.tag_name) ?? "",
+    );
     output("sync", plan.sync);
     output("release", plan.release);
     console.log(
@@ -250,9 +273,17 @@ if (import.meta.main) {
     );
   } else if (process.argv[2] === "merge") {
     try {
+      const expected = process.env.NIGHTLY_COMMIT ?? "";
+      if (!/^[a-f0-9]{40}$/.test(expected))
+        throw new Error("The check job did not resolve the official nightly commit.");
       output(
         "ref",
-        syncNightly(cwd, "https://github.com/pingdotgg/t3code.git", process.env.NIGHTLY_TAG ?? ""),
+        syncNightly(
+          cwd,
+          "https://github.com/pingdotgg/t3code.git",
+          process.env.NIGHTLY_TAG ?? "",
+          expected,
+        ),
       );
     } catch (error) {
       // The failure step publishes the marker after this process has stopped,

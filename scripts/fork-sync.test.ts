@@ -107,7 +107,21 @@ describe("published nightly sync", () => {
       commit: published,
     });
     expect(git(fork, "status", "--porcelain")).toBe("");
-    expect(syncNightly(fork, upstream, TAG)).toBe(merged);
+    expect(syncNightly(fork, upstream, TAG, published)).toBe(merged);
+  });
+  it("refuses a tag that moved after the check or is not on official main", () => {
+    write(upstream, "feature.txt", "published\n");
+    commit(upstream);
+    const checked = git(upstream, "rev-parse", "HEAD");
+    git(upstream, "checkout", "-q", "-b", "side");
+    write(upstream, "feature.txt", "unreviewed\n");
+    commit(upstream);
+    git(upstream, "tag", TAG);
+    const original = git(fork, "rev-parse", "HEAD");
+    expect(() => syncNightly(fork, upstream, TAG, checked)).toThrow(/moved/);
+    expect(() => syncNightly(fork, upstream, TAG)).toThrow(/not on the official main/);
+    expect(git(fork, "rev-parse", "HEAD")).toBe(original);
+    expect(git(fork, "status", "--porcelain")).toBe("");
   });
   it("aborts a real code conflict without discarding either side or advancing the marker", () => {
     write(fork, "feature.txt", "personal behavior\n");

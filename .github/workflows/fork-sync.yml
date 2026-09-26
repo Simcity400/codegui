@@ -23,18 +23,19 @@ jobs:
     timeout-minutes: 5
     outputs:
       tag: ${{ steps.check.outputs.tag }}
+      commit: ${{ steps.check.outputs.commit }}
       sync: ${{ steps.check.outputs.sync }}
       release: ${{ steps.check.outputs.release }}
       ref: ${{ steps.check.outputs.ref }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           ref: main
           sparse-checkout: |
             /*
             !/.repos/
           sparse-checkout-cone-mode: false
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: "24"
       - id: check
@@ -65,16 +66,17 @@ jobs:
       # clone whose promisor is origin, and merging the official tag then fails
       # to lazily fetch upstream-only blobs ("not our ref"). The gate job can
       # stay sparse because it never merges.
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           ref: main
           fetch-depth: 0
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: "24"
       - id: merge
         env:
           NIGHTLY_TAG: ${{ needs.gate.outputs.tag }}
+          NIGHTLY_COMMIT: ${{ needs.gate.outputs.commit }}
           FORK_SYNC_CONFLICTS_FILE: ${{ runner.temp }}/fork-sync-conflicts.json
         run: |
           git config user.name "github-actions[bot]"
@@ -122,6 +124,7 @@ jobs:
     uses: ./.github/workflows/fork-mobile-preview.yml
     with:
       ref: ${{ needs.sync.outputs.ref }}
-    secrets: inherit
+    secrets:
+      EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
     permissions:
       contents: read
