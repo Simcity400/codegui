@@ -38,9 +38,10 @@ import {
   type ApplePushResult,
 } from "./applePush.ts";
 
-const { send, createSender } = vi.hoisted(() => ({
+const { send, createSender, activeSessions } = vi.hoisted(() => ({
   send: vi.fn<(message: ApplePushMessage) => Promise<ApplePushResult>>(),
   createSender: vi.fn(),
+  activeSessions: new Set<string>(),
 }));
 vi.mock("./applePush.ts", async (original) => ({
   ...(await original<object>()),
@@ -51,6 +52,8 @@ beforeEach(() => {
   createSender.mockReset();
   createSender.mockReturnValue(send);
   send.mockResolvedValue({ ok: true, status: 200, reason: null });
+  activeSessions.clear();
+  activeSessions.add("session-1");
 });
 
 const principal: EnvironmentSessionPrincipalShape = {
@@ -97,13 +100,52 @@ const dependencies = Layer.mergeAll(
     cookieName: "test",
     legacyCookieName: undefined,
     streamChanges: Stream.never,
+    // Revoked and expired sessions are simply absent from the active list.
+    listActive: () =>
+      Effect.sync(() =>
+        [...activeSessions].map((sessionId) => ({
+          sessionId: AuthSessionId.make(sessionId),
+          subject: "owner",
+          scopes: [],
+          method: "bearer-access-token" as const,
+          client: { deviceType: "mobile" as const },
+          issuedAt: DateTime.makeUnsafe(0),
+          expiresAt: DateTime.makeUnsafe(0),
+          lastConnectedAt: null,
+          connected: false,
+          current: false,
+        })),
+      ),
   }),
 );
+const encodeStoredDevices = Schema.encodeEffect(
+  Schema.fromJsonString(Schema.Array(Schema.Unknown)),
+);
+const decodeStoredDevices = Schema.decodeUnknownEffect(
+  Schema.fromJsonString(
+    Schema.Array(
+      Schema.Struct({
+        sessionId: Schema.String,
+        registration: Schema.Struct({ deviceId: Schema.String }),
+      }),
+    ),
+  ),
+);
+const storedDevices = Effect.gen(function* () {
+  const config = yield* ServerConfig;
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const devices = yield* decodeStoredDevices(
+    yield* fs.readFileString(path.join(config.stateDir, "mobile-push.json")),
+  );
+  return devices.map((device) => device.registration.deviceId);
+});
 
 function run<A, E>(
-  program: Effect.Effect<A, E, DirectPush>,
+  program: Effect.Effect<A, E, DirectPush | ServerConfig | FileSystem.FileSystem | Path.Path>,
   configured = true,
   services = dependencies,
+  stored: ReadonlyArray<object> = [],
 ) {
   return Effect.scoped(
     Effect.gen(function* () {
@@ -118,6 +160,13 @@ function run<A, E>(
           privateKey: "test-only",
         });
         yield* fs.writeFileString(path.join(config.baseDir, "apple-push.json"), json);
+      }
+      if (stored.length > 0) {
+        yield* fs.makeDirectory(config.stateDir, { recursive: true });
+        yield* fs.writeFileString(
+          path.join(config.stateDir, "mobile-push.json"),
+          yield* encodeStoredDevices(stored),
+        );
       }
       return yield* program.pipe(Effect.provide(layer.pipe(Layer.provide(services))));
     }),
@@ -593,5 +642,171 @@ it.effect("a finished background task moves a Monitoring thread to Done", () =>
       true,
       services,
     );
+  }),
+);
+
+it.effect("stops pushing to a device whose session was revoked or expired elsewhere", () =>
+  Effect.gen(function* () {
+    const events = yield* Queue.unbounded<OrchestrationEvent>();
+    const delivered = yield* Queue.unbounded<ApplePushMessage>();
+    const now = DateTime.formatIso(yield* DateTime.now);
+    const project: OrchestrationProjectShell = {
+      id: ProjectId.make("project-1"),
+      title: "Project",
+      workspaceRoot: "/workspace",
+      repositoryIdentity: null,
+      defaultModelSelection: null,
+      scripts: [],
+      createdAt: now,
+      updatedAt: now,
+    };
+    const threadId = ThreadId.make("thread-1");
+    const turn = {
+      turnId: TurnId.make("turn-1"),
+      requestedAt: now,
+      startedAt: now,
+      assistantMessageId: null,
+    };
+    let thread: OrchestrationThreadShell = {
+      id: threadId,
+      projectId: project.id,
+      title: "Task",
+      modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5.4" },
+      runtimeMode: "full-access",
+      interactionMode: "default",
+      branch: null,
+      worktreePath: null,
+      pullRequests: [],
+      latestTurn: { ...turn, state: "running", completedAt: null },
+      createdAt: now,
+      updatedAt: now,
+      archivedAt: null,
+      settledOverride: null,
+      settledAt: null,
+      session: null,
+      latestUserMessageAt: now,
+      hasPendingApprovals: false,
+      hasPendingUserInput: false,
+      hasActionableProposedPlan: false,
+    };
+    const services = Layer.mergeAll(
+      dependencies,
+      Layer.mock(ProjectionSnapshotQuery, {
+        getShellSnapshot: () =>
+          Effect.sync(() => ({
+            snapshotSequence: 0,
+            projects: [project],
+            threads: [thread],
+            updatedAt: now,
+          })),
+        getThreadShellById: () => Effect.sync(() => Option.some(thread)),
+        getProjectShellById: () => Effect.succeed(Option.some(project)),
+      }),
+      Layer.mock(OrchestrationEngineService, {
+        subscribeDomainEvents: Effect.succeed(Stream.fromQueue(events)),
+      }),
+    );
+    const tablet = { ...principal, sessionId: AuthSessionId.make("session-2") };
+    const tabletRegistration = { ...registration, deviceId: "tablet", pushToken: "c".repeat(64) };
+    activeSessions.add("session-2");
+    yield* run(
+      Effect.gen(function* () {
+        const push = yield* DirectPush;
+        // The revoked phone registers first, so it would be pushed to first.
+        yield* push.register(principal, registration);
+        yield* push.register(tablet, tabletRegistration);
+        // `t3 auth session revoke` and expiry never reach this server as events.
+        activeSessions.delete("session-1");
+        send.mockImplementation((message) =>
+          // oxlint-disable-next-line t3code/no-manual-effect-runtime-in-tests -- Mock the Promise-based APNs transport boundary.
+          Effect.runPromise(
+            Queue.offer(delivered, message).pipe(
+              Effect.as({ ok: true, status: 200, reason: null }),
+            ),
+          ),
+        );
+        thread = { ...thread, latestTurn: { ...turn, state: "completed", completedAt: now } };
+        yield* Queue.offer(events, {
+          type: "thread.settled",
+          sequence: 1,
+          eventId: EventId.make("evt-complete"),
+          commandId: CommandId.make("cmd-complete"),
+          aggregateKind: "thread",
+          aggregateId: threadId,
+          causationEventId: null,
+          correlationId: null,
+          payload: { threadId, settledAt: now, updatedAt: now },
+          occurredAt: now,
+          metadata: {},
+        });
+        expect(yield* Queue.take(delivered)).toMatchObject({
+          kind: "alert",
+          token: tabletRegistration.pushToken,
+        });
+        yield* push.register(tablet, tabletRegistration);
+        expect(yield* storedDevices).toEqual(["tablet"]);
+      }),
+      true,
+      services,
+    );
+  }),
+);
+
+it.effect("drops stored devices whose session ended while the server was down", () =>
+  Effect.gen(function* () {
+    const devices = yield* run(storedDevices, true, dependencies, [
+      { subject: "owner", sessionId: "session-1", registration },
+      {
+        subject: "owner",
+        sessionId: "session-revoked",
+        registration: { ...registration, deviceId: "old-phone", pushToken: "d".repeat(64) },
+      },
+    ]);
+    expect(devices).toEqual(["phone"]);
+  }),
+);
+
+it.effect("keeps only the most recently registered devices per owner", () =>
+  Effect.gen(function* () {
+    const devices = yield* run(
+      Effect.gen(function* () {
+        const push = yield* DirectPush;
+        for (const n of [1, 2, 3, 4, 5, 6])
+          yield* push.register(principal, {
+            ...registration,
+            deviceId: `phone-${n}`,
+            pushToken: String(n).repeat(64),
+          });
+        // Re-registering refreshes a device, so the next oldest goes instead.
+        yield* push.register(principal, {
+          ...registration,
+          deviceId: "phone-2",
+          pushToken: "2".repeat(64),
+        });
+        yield* push.register(principal, {
+          ...registration,
+          deviceId: "phone-7",
+          pushToken: "7".repeat(64),
+        });
+        return yield* storedDevices;
+      }),
+    );
+    expect(devices).toEqual(["phone-4", "phone-5", "phone-6", "phone-2", "phone-7"]);
+  }),
+);
+
+it.effect("forgets a device once Apple rejects its only token", () =>
+  Effect.gen(function* () {
+    send.mockResolvedValueOnce({ ok: false, status: 400, reason: "BadDeviceToken" });
+    const devices = yield* run(
+      Effect.gen(function* () {
+        const push = yield* DirectPush;
+        expect((yield* push.register(principal, registration)).deliveryError).toContain(
+          "BadDeviceToken",
+        );
+        return yield* storedDevices;
+      }),
+    );
+    expect(devices).toEqual([]);
   }),
 );

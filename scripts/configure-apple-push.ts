@@ -72,6 +72,8 @@ try {
       { cause: error },
     );
 }
+// `mode` only applies when the file is created; tighten an existing one too.
+await NodeFSP.chmod(destination, 0o600);
 console.log(
   `Apple push configured for ${bundleId}. Key stored locally at ${destination}; no credential was printed.`,
 );
