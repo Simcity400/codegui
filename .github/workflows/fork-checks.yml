@@ -75,6 +75,8 @@ jobs:
             apps/desktop/src/updates/DesktopUpdates.test.ts \
             apps/desktop/src/updates/windowsUpdateSelection.test.ts \
             apps/desktop/src/electron/ElectronUpdater.windows.test.ts \
+            apps/server/src/mcp/PreviewAutomationBroker.test.ts \
+            apps/server/src/mcp/toolkits/preview/handlers.test.ts \
             apps/server/src/provider/Layers/CodexSessionRuntime.test.ts \
             apps/server/src/persistence/ForkCompatibility.test.ts \
             apps/server/src/persistence/Layers/OrchestrationEventStore.test.ts \
