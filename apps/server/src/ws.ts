@@ -95,6 +95,8 @@ import {
   projectThreadDetailSnapshot,
 } from "./orchestration/ActivityPayloadProjection.ts";
 import { listAgentMessages } from "./orchestration/agentMessages.ts";
+import { subscribeAgentRoster, subscribeAgentTranscript } from "./orchestration/AgentStreams.ts";
+import { compactAgentCursors, parentThreadItem } from "@t3tools/shared/agentTranscripts";
 import { makeThreadLiveEventCoalescer } from "./orchestration/ThreadLiveEventCoalescer.ts";
 import { makeLiveStreamBudget, type RetainedLiveItem } from "./orchestration/LiveStreamBudget.ts";
 import {
@@ -1864,6 +1866,7 @@ const makeWsRpcLayer = (
                 }),
             threadResumeCompletionMarker: true,
             threadSnapshotPagination: true,
+            separateAgentTranscripts: true,
             reasoningMessages: true,
           };
         });
@@ -2191,12 +2194,23 @@ const makeWsRpcLayer = (
                 event.aggregateId === input.threadId &&
                 isThreadDetailEvent(event);
 
+              const projectThreadItem = (event: OrchestrationEvent) => {
+                const item =
+                  input.separateAgentTranscripts === true
+                    ? parentThreadItem(event)
+                    : { kind: "event" as const, event };
+                return item.kind === "cursor"
+                  ? item
+                  : {
+                      kind: "event" as const,
+                      event: projectActivityEvent(event, input.reasoningMessages === true),
+                    };
+              };
+
               const liveStream = orchestrationEngine.streamDomainEvents.pipe(
                 Stream.filter(isThisThreadDetailEvent),
-                Stream.map((event) => ({
-                  kind: "event" as const,
-                  event: projectActivityEvent(event, input.reasoningMessages === true),
-                })),
+                Stream.map(projectThreadItem),
+                Stream.mapArray(compactAgentCursors),
               );
 
               // Attach live delivery before reading either replay or snapshot state.
@@ -2263,10 +2277,8 @@ const makeWsRpcLayer = (
                     .readThreadEvents({ ...range, limit: THREAD_RESUME_MAX_EVENTS })
                     .pipe(
                       Stream.filter(isThisThreadDetailEvent),
-                      Stream.map((event) => ({
-                        kind: "event" as const,
-                        event: projectActivityEvent(event, input.reasoningMessages === true),
-                      })),
+                      Stream.map(projectThreadItem),
+                      Stream.mapArray(compactAgentCursors),
                       Stream.mapError(
                         (cause) =>
                           new OrchestrationGetSnapshotError({
@@ -2300,7 +2312,14 @@ const makeWsRpcLayer = (
                   // clients that don't send turnLimit (including all
                   // pre-pagination clients) get the full thread, since they
                   // have no way to load older pages.
-                  input.turnLimit === undefined ? undefined : { turnLimit: input.turnLimit },
+                  input.turnLimit === undefined
+                    ? undefined
+                    : {
+                        turnLimit: input.turnLimit,
+                        ...(input.separateAgentTranscripts === true
+                          ? { separateAgentTranscripts: true }
+                          : {}),
+                      },
                 )
                 .pipe(
                   Effect.mapError(
@@ -2359,6 +2378,18 @@ const makeWsRpcLayer = (
                   }),
               ),
             ),
+            { "rpc.aggregate": "orchestration" },
+          ),
+        [ORCHESTRATION_WS_METHODS.subscribeAgentRoster]: (input) =>
+          observeRpcStreamEffect(
+            ORCHESTRATION_WS_METHODS.subscribeAgentRoster,
+            Effect.succeed(subscribeAgentRoster(input.threadId)),
+            { "rpc.aggregate": "orchestration" },
+          ),
+        [ORCHESTRATION_WS_METHODS.subscribeAgentTranscript]: (input) =>
+          observeRpcStreamEffect(
+            ORCHESTRATION_WS_METHODS.subscribeAgentTranscript,
+            Effect.succeed(subscribeAgentTranscript(input)),
             { "rpc.aggregate": "orchestration" },
           ),
         [WS_METHODS.serverProbe]: (_input) =>

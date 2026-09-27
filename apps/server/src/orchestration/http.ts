@@ -74,6 +74,9 @@ export const orchestrationHttpApiLayer = HttpApiBuilder.group(
                 ? undefined
                 : {
                     turnLimit: args.payload.turnLimit,
+                    ...(args.payload.separateAgentTranscripts === "true"
+                      ? { separateAgentTranscripts: true }
+                      : {}),
                     ...(args.payload.beforeCursor !== undefined
                       ? { beforeCursor: args.payload.beforeCursor }
                       : {}),

@@ -8,6 +8,7 @@ const mocks = vi.hoisted(() => ({
   granted: true,
   liveEnabled: true,
   saved: null as string | null,
+  storageWrites: 0,
   getToken: vi.fn(() => Promise.resolve({ type: "ios", data: "a".repeat(64) })),
   registered: [] as Array<{
     url: string;
@@ -42,6 +43,7 @@ vi.mock("expo-notifications", () => ({
 vi.mock("expo-secure-store", () => ({
   getItemAsync: () => Promise.resolve(mocks.saved),
   setItemAsync: (_key: string, value: string) => {
+    mocks.storageWrites++;
     mocks.saved = value;
     return Promise.resolve();
   },
@@ -119,6 +121,7 @@ beforeEach(() => {
   mocks.granted = true;
   mocks.liveEnabled = true;
   mocks.saved = null;
+  mocks.storageWrites = 0;
   mocks.instances = [];
   mocks.registered = [];
   mocks.unregistered = [];
@@ -127,6 +130,18 @@ beforeEach(() => {
   mocks.response = { configured: true, aggregate: null, deliveryError: null };
 });
 describe("personal iPhone direct registration", () => {
+  it("refreshes permissions and server state without rewriting unchanged activity IDs", async () => {
+    const client = await import("./directRegistration");
+    await client.setDirectPushConnections([connection()]);
+    expect(mocks.storageWrites).toBe(1);
+    await client.refreshDirectPushRegistration();
+    expect(mocks.registered).toHaveLength(2);
+    expect(mocks.storageWrites).toBe(1);
+    mocks.granted = false;
+    await client.refreshDirectPushRegistration();
+    expect(mocks.registered.at(-1)?.payload.notificationsEnabled).toBe(false);
+    expect(mocks.storageWrites).toBe(1);
+  });
   it("authenticates T3 Connect registration with the device's DPoP proof", async () => {
     const client = await import("./directRegistration");
     await client.setDirectPushConnections([

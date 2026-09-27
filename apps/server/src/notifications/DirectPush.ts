@@ -164,10 +164,19 @@ export const layer = Layer.effect(
         }
       return pruned;
     });
+    let persistedSubscriptions: string | null = null;
     const persist = () =>
       encodeSubscriptions([...subscriptions.values()]).pipe(
         Effect.flatMap((contents) =>
-          writeFileStringAtomically({ filePath: subscriptionsPath, contents }),
+          contents === persistedSubscriptions
+            ? Effect.void
+            : writeFileStringAtomically({ filePath: subscriptionsPath, contents }).pipe(
+                Effect.tap(() =>
+                  Effect.sync(() => {
+                    persistedSubscriptions = contents;
+                  }),
+                ),
+              ),
         ),
         Effect.provideService(FileSystem.FileSystem, fs),
         Effect.provideService(Path.Path, path),

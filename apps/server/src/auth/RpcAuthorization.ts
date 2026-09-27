@@ -31,6 +31,8 @@ export const RPC_REQUIRED_SCOPES = {
   [ORCHESTRATION_WS_METHODS.getArchivedShellSnapshot]: AuthOrchestrationReadScope,
   [ORCHESTRATION_WS_METHODS.subscribeThread]: AuthOrchestrationReadScope,
   [ORCHESTRATION_WS_METHODS.getAgentMessages]: AuthOrchestrationReadScope,
+  [ORCHESTRATION_WS_METHODS.subscribeAgentRoster]: AuthOrchestrationReadScope,
+  [ORCHESTRATION_WS_METHODS.subscribeAgentTranscript]: AuthOrchestrationReadScope,
   [WS_METHODS.serverProbe]: AuthOrchestrationReadScope,
   [WS_METHODS.serverGetConfig]: AuthOrchestrationReadScope,
   [WS_METHODS.serverRefreshProviders]: AuthOrchestrationOperateScope,

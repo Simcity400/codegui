@@ -4,6 +4,7 @@ import * as SchemaIssue from "effect/SchemaIssue";
 import * as SchemaTransformation from "effect/SchemaTransformation";
 import * as Struct from "effect/Struct";
 import { OrchestrationMessageContext } from "./composerContext.ts";
+import { AgentRoster, AgentRosterUpdate } from "./subagents.ts";
 import { ProviderOptionSelections } from "./model.ts";
 import { RepositoryIdentity, ThreadEnvMode } from "./environment.ts";
 import {
@@ -42,6 +43,8 @@ export const ORCHESTRATION_WS_METHODS = {
   subscribeShell: "orchestration.subscribeShell",
   subscribeThread: "orchestration.subscribeThread",
   getAgentMessages: "orchestration.getAgentMessages",
+  subscribeAgentRoster: "orchestration.subscribeAgentRoster",
+  subscribeAgentTranscript: "orchestration.subscribeAgentTranscript",
 } as const;
 
 export const ProviderApprovalPolicy = Schema.Literals([
@@ -1010,6 +1013,8 @@ export type OrchestrationSubscribeShellInput = typeof OrchestrationSubscribeShel
 
 export const OrchestrationSubscribeThreadInput = Schema.Struct({
   threadId: ThreadId,
+  /** Fork clients load child transcripts separately and accept cursor-only updates. */
+  separateAgentTranscripts: Schema.optionalKey(Schema.Boolean),
   /** Opt in to reasoning roles; older clients receive system messages instead. */
   reasoningMessages: Schema.optionalKey(Schema.Boolean),
   /**
@@ -1046,6 +1051,7 @@ export type OrchestrationSubscribeThreadInput = typeof OrchestrationSubscribeThr
  * WebSocket fallback snapshot.
  */
 export const OrchestrationThreadDetailWindow = Schema.Struct({
+  separateAgentTranscripts: Schema.optionalKey(Schema.Boolean),
   turnLimit: Schema.optionalKey(PositiveInt),
   beforeCursor: Schema.optionalKey(TrimmedNonEmptyString),
 });
@@ -1078,6 +1084,8 @@ export type OrchestrationThreadDetailPage = typeof OrchestrationThreadDetailPage
 export const OrchestrationThreadDetailSnapshot = Schema.Struct({
   snapshotSequence: NonNegativeInt,
   thread: OrchestrationThread,
+  // Local caches must reload when switching between fork and legacy transcript routing.
+  separateAgentTranscripts: Schema.optional(Schema.Boolean),
   // Present only on windowed responses. Absent on full snapshots (and from
   // pre-pagination servers), which clients treat as fully loaded.
   page: Schema.optional(OrchestrationThreadDetailPage),
@@ -2225,6 +2233,7 @@ export const OrchestrationEvent = Schema.Union([
 export type OrchestrationEvent = typeof OrchestrationEvent.Type;
 
 export const OrchestrationThreadStreamItem = Schema.Union([
+  Schema.Struct({ kind: Schema.Literal("cursor"), sequence: NonNegativeInt }),
   Schema.Struct({
     kind: Schema.Literal("synchronized"),
   }),
@@ -2346,6 +2355,24 @@ export const OrchestrationGetAgentMessagesResult = Schema.Struct({
 });
 export type OrchestrationGetAgentMessagesResult = typeof OrchestrationGetAgentMessagesResult.Type;
 
+export const AgentTranscriptSnapshot = Schema.Struct({
+  messages: Schema.Array(OrchestrationMessage),
+  activities: Schema.Array(OrchestrationThreadActivity),
+});
+export type AgentTranscriptSnapshot = typeof AgentTranscriptSnapshot.Type;
+
+export const AgentTranscriptStreamItem = Schema.Union([
+  Schema.Struct({ kind: Schema.Literal("snapshot"), snapshot: AgentTranscriptSnapshot }),
+  Schema.Struct({ kind: Schema.Literal("event"), event: OrchestrationEvent }),
+]);
+export type AgentTranscriptStreamItem = typeof AgentTranscriptStreamItem.Type;
+
+export const AgentRosterStreamItem = Schema.Union([
+  Schema.Struct({ kind: Schema.Literal("snapshot"), snapshot: AgentRoster }),
+  Schema.Struct({ kind: Schema.Literal("update"), update: AgentRosterUpdate }),
+]);
+export type AgentRosterStreamItem = typeof AgentRosterStreamItem.Type;
+
 export const OrchestrationGetWorkflowScriptInput = Schema.Struct({
   threadId: ThreadId,
   /** Absolute path from the workflow's runHandles.scriptPath. The server
@@ -2430,6 +2457,14 @@ export const OrchestrationRpcSchemas = {
   getAgentMessages: {
     input: OrchestrationGetAgentMessagesInput,
     output: OrchestrationGetAgentMessagesResult,
+  },
+  subscribeAgentRoster: {
+    input: Schema.Struct({ threadId: ThreadId }),
+    output: AgentRosterStreamItem,
+  },
+  subscribeAgentTranscript: {
+    input: OrchestrationGetAgentMessagesInput,
+    output: AgentTranscriptStreamItem,
   },
 } as const;
 

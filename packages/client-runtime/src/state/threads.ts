@@ -142,6 +142,7 @@ interface ThreadResumeSnapshot {
   readonly state: EnvironmentThreadState;
   readonly sequence: number;
   readonly persisted: boolean;
+  readonly separateAgentTranscripts?: boolean;
 }
 
 interface ThreadResumeCache {
@@ -210,6 +211,9 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
         )
       : Option.none<OrchestrationThreadDetailSnapshot>();
   const cachedThread = Option.map(cached, (snapshot) => snapshot.thread);
+  let separatedContent =
+    retained?.separateAgentTranscripts ??
+    Option.exists(cached, (snapshot) => snapshot.separateAgentTranscripts === true);
   const initialState: EnvironmentThreadState = retained
     ? cachedThreadState(retained.state)
     : {
@@ -231,6 +235,7 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
     state: initialState,
     sequence: initialSequence,
     persisted: retained?.persisted ?? Option.isSome(cached),
+    separateAgentTranscripts: separatedContent,
   };
   if (resumeCache?.owner === owner) resumeCache.snapshot = committed;
   const awaitingCompletion = yield* Ref.make(false);
@@ -250,8 +255,10 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
     committed = {
       state: current,
       sequence,
+      separateAgentTranscripts: separatedContent,
       persisted:
         committed.persisted &&
+        committed.separateAgentTranscripts === separatedContent &&
         matchesThreadSnapshot(
           committed,
           Option.getOrNull(current.data),
@@ -266,6 +273,7 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
   // pre-pagination server never sends unsupported window parameters.
   const paginationSupported = yield* Ref.make(false);
   const reasoningMessagesSupported = yield* Ref.make(false);
+  const separateAgentTranscriptsSupported = yield* Ref.make(false);
   // An older page whose thread watermark is ahead of the live state, parked
   // until the subscription catches up (see mergeOlderPage's caller). At most
   // one can exist because loadOlderTurns no-ops while loadingOlder is true.
@@ -345,6 +353,7 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
     // finding). makeSubscribeInput re-sets it from the next session's config.
     yield* Ref.set(paginationSupported, false);
     yield* Ref.set(reasoningMessagesSupported, false);
+    yield* Ref.set(separateAgentTranscriptsSupported, false);
     yield* SubscriptionRef.update(state, (current) => ({
       ...current,
       status: current.status === "deleted" ? current.status : statusWithoutLiveData(current.data),
@@ -368,6 +377,7 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
       yield* Queue.offer(persistence, {
         snapshotSequence,
         thread,
+        ...(separatedContent ? { separateAgentTranscripts: true } : {}),
         // Persist the window boundary with the window's content so a cache
         // restore can keep paging from where the loaded history ends.
         ...Option.match(currentPage, {
@@ -440,6 +450,11 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
   const applyItemLocked = Effect.fn("EnvironmentThreadState.applyItemLocked")(function* (
     item: OrchestrationThreadStreamItem,
   ) {
+    if (item.kind === "cursor") {
+      yield* SubscriptionRef.update(lastSequence, (sequence) => Math.max(sequence, item.sequence));
+      yield* tryMergePendingOlderPage();
+      return;
+    }
     if (item.kind === "synchronized") {
       yield* Ref.set(awaitingCompletion, false);
       yield* SubscriptionRef.update(state, (current) =>
@@ -561,7 +576,9 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
         // this batch publishes. Its cursor must describe that settled content.
         let persistable: { thread: OrchestrationThread; sequence: number } | undefined;
         for (const item of items) {
-          if (item.kind === "synchronized") {
+          if (item.kind === "cursor") {
+            sequence = Math.max(sequence, item.sequence);
+          } else if (item.kind === "synchronized") {
             synchronized = true;
           } else if (item.kind === "event" && item.event.sequence > sequence) {
             sequence = item.event.sequence;
@@ -634,6 +651,7 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
       yield* Queue.offer(persistence, {
         snapshotSequence,
         thread: merged,
+        ...(separatedContent ? { separateAgentTranscripts: true } : {}),
         ...(snapshot.page === undefined ? {} : { page: { ...snapshot.page, snapshotSequence } }),
       });
     }
@@ -661,6 +679,9 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
       page: Option.map(value.page, (existing) => ({ ...existing, loadingOlder: true })),
     }));
     const window: ThreadSnapshotWindow = {
+      ...((yield* Ref.get(separateAgentTranscriptsSupported))
+        ? { separateAgentTranscripts: true }
+        : {}),
       turnLimit: OLDER_THREAD_PAGE_USER_TURN_LIMIT,
       beforeCursor: page.beforeCursor,
     };
@@ -762,6 +783,7 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
                 threadResumeCompletionMarker?: boolean;
                 threadSnapshotPagination?: boolean;
                 reasoningMessages?: boolean;
+                separateAgentTranscripts?: boolean;
               },
           ),
         );
@@ -771,6 +793,8 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
         // such a server would silently hide history.
         const supportsPagination = config.threadSnapshotPagination === true;
         const supportsReasoningMessages = config.reasoningMessages === true;
+        const separateAgentTranscripts = config.separateAgentTranscripts === true;
+        yield* Ref.set(separateAgentTranscriptsSupported, separateAgentTranscripts);
         yield* Ref.set(reasoningMessagesSupported, supportsReasoningMessages);
         yield* Ref.set(paginationSupported, supportsPagination);
         yield* Ref.set(awaitingCompletion, supportsCompletionMarker);
@@ -778,6 +802,25 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
         yield* Ref.set(resumingLive, false);
 
         let current = yield* SubscriptionRef.get(state);
+        // A legacy window's activity limit may have been filled by child tools.
+        // Reload once on a routing change, including a downgrade to an older host.
+        if (separatedContent !== separateAgentTranscripts) {
+          yield* applyLock.withPermits(1)(
+            Effect.gen(function* () {
+              separatedContent = separateAgentTranscripts;
+              yield* Ref.update(historyEpoch, (epoch) => epoch + 1);
+              yield* Ref.set(pendingOlderPage, null);
+              yield* SubscriptionRef.update(state, (value) => ({
+                ...value,
+                data: Option.none(),
+                page: Option.none(),
+              }));
+              yield* SubscriptionRef.set(lastSequence, 0);
+              yield* remember;
+            }),
+          );
+          current = yield* SubscriptionRef.get(state);
+        }
         // A windowed cache resuming against a server without pagination is a
         // trap: afterSequence resume keeps only the window, and the missing
         // older turns can never be loaded (the server has no cursor reads).
@@ -817,7 +860,12 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
           const httpSnapshot = yield* snapshotLoader.load(
             prepared,
             threadId,
-            supportsPagination ? { turnLimit: INITIAL_THREAD_USER_TURN_LIMIT } : undefined,
+            supportsPagination
+              ? {
+                  turnLimit: INITIAL_THREAD_USER_TURN_LIMIT,
+                  ...(separateAgentTranscripts ? { separateAgentTranscripts: true } : {}),
+                }
+              : undefined,
             supportsReasoningMessages,
           );
           if (Option.isSome(httpSnapshot)) {
@@ -841,6 +889,7 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
           ...(canResume ? { afterSequence: sequence } : {}),
           ...(supportsCompletionMarker ? { requestCompletionMarker: true as const } : {}),
           ...(supportsReasoningMessages ? { reasoningMessages: true as const } : {}),
+          ...(separateAgentTranscripts ? { separateAgentTranscripts: true as const } : {}),
           // The WS fallback snapshot (sent when afterSequence is missing or
           // the gap is too large) should be windowed the same as the HTTP
           // path; without this a resume failure re-downloads the full thread.
@@ -888,6 +937,7 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
             ? persist({
                 snapshotSequence,
                 thread,
+                ...(committed.separateAgentTranscripts ? { separateAgentTranscripts: true } : {}),
                 ...Option.match(current.page, {
                   onNone: () => ({}),
                   onSome: (page) =>

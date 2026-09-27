@@ -32,6 +32,7 @@ const DEFAULT_THREAD_SNAPSHOT_TIMEOUT_MS = 20_000;
  * query parameters.
  */
 export interface ThreadSnapshotWindow {
+  readonly separateAgentTranscripts?: boolean;
   readonly turnLimit: number;
   readonly beforeCursor?: string;
 }
@@ -58,6 +59,9 @@ export const fetchEnvironmentThreadSnapshot = Effect.fn(
       client.threadSnapshot({
         params: { threadId: input.threadId },
         payload: {
+          ...(input.window?.separateAgentTranscripts === true
+            ? { separateAgentTranscripts: "true" as const }
+            : {}),
           ...(input.reasoningMessages === true ? { reasoningMessages: "true" as const } : {}),
           ...(input.window !== undefined ? { turnLimit: input.window.turnLimit } : {}),
           ...(input.window?.beforeCursor !== undefined

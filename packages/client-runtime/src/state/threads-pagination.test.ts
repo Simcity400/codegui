@@ -134,6 +134,7 @@ type LoaderResponse = Option.Option<OrchestrationThreadDetailSnapshot>;
 const makeHarness = Effect.fn("TestThreadPagination.makeHarness")(function* (options?: {
   readonly paginationCapability?: boolean;
   readonly reasoningCapability?: boolean;
+  readonly agentTranscriptCapability?: boolean;
   readonly initialResponse?: LoaderResponse;
   /** Cached snapshot returned by the cache store (simulates a warm cache). */
   readonly cached?: OrchestrationThreadDetailSnapshot;
@@ -159,6 +160,7 @@ const makeHarness = Effect.fn("TestThreadPagination.makeHarness")(function* (opt
     initialConfig: Effect.succeed({
       threadSnapshotPagination: options?.paginationCapability !== false,
       reasoningMessages: options?.reasoningCapability === true,
+      separateAgentTranscripts: options?.agentTranscriptCapability === true,
     } as never),
     subscribeServerConfig: (input) => client.subscribeServerConfig(input),
     ready: Effect.void,
@@ -292,6 +294,87 @@ const revertEvent = (sequence: number): OrchestrationThreadStreamItem => ({
 });
 
 describe("thread pagination state", () => {
+  it.effect("negotiates fork transcript routing and reloads a legacy cache once", () =>
+    Effect.gen(function* () {
+      const harness = yield* makeHarness({
+        cached: WINDOWED_SNAPSHOT,
+        agentTranscriptCapability: true,
+        initialResponse: Option.some({ ...WINDOWED_SNAPSHOT, snapshotSequence: 20 }),
+      });
+      yield* Queue.offer(harness.inputs, titleEvent("Fresh cache", 21));
+      yield* harness.awaitState((value) =>
+        Option.exists(value.data, (thread) => thread.title === "Fresh cache"),
+      );
+      expect(yield* Ref.get(harness.loaderWindows)).toEqual([
+        { turnLimit: INITIAL_THREAD_USER_TURN_LIMIT, separateAgentTranscripts: true },
+      ]);
+      expect(yield* Ref.get(harness.lastSubscribeInput)).toMatchObject({
+        afterSequence: 20,
+        separateAgentTranscripts: true,
+      });
+    }),
+  );
+
+  it.effect(
+    "a child-only replay cursor releases pending pagination without changing conversation content",
+    () =>
+      Effect.gen(function* () {
+        const harness = yield* makeHarness({
+          agentTranscriptCapability: true,
+          cached: { ...WINDOWED_SNAPSHOT, separateAgentTranscripts: true },
+        });
+        yield* harness.awaitState((value) => Option.isSome(value.page));
+        yield* Queue.offer(harness.inputs, titleEvent("Ready", 11));
+        yield* harness.awaitState((value) =>
+          Option.exists(value.data, (thread) => thread.title === "Ready"),
+        );
+        expect(yield* Ref.get(harness.loaderWindows)).toEqual([]);
+        requestOlderThreadTurns(TARGET.environmentId, THREAD_ID);
+        yield* harness.resolveNextPage(
+          Option.some({
+            ...OLDER_PAGE,
+            snapshotSequence: 12,
+            page: { beforeCursor: null, hasMore: false, snapshotSequence: 12, threadSequence: 12 },
+          }),
+        );
+        yield* Queue.offerAll(harness.inputs, [
+          { kind: "cursor", sequence: 12 },
+          titleEvent("After cursor", 13),
+        ]);
+        const state = yield* harness.awaitState(
+          (value) =>
+            hasMessage(value, "message-old") &&
+            Option.exists(value.data, (thread) => thread.title === "After cursor"),
+        );
+        expect(Option.getOrThrow(state.data).messages.map((message) => message.id)).toEqual([
+          "message-old",
+          "message-recent",
+        ]);
+        expect(yield* Ref.get(harness.loaderWindows)).toEqual([
+          { turnLimit: 20, beforeCursor: "cursor-1", separateAgentTranscripts: true },
+        ]);
+      }),
+  );
+
+  it.effect("reloads a separated cache when reconnecting to a legacy host", () =>
+    Effect.gen(function* () {
+      const harness = yield* makeHarness({
+        cached: { ...WINDOWED_SNAPSHOT, separateAgentTranscripts: true },
+        initialResponse: Option.some(WINDOWED_SNAPSHOT),
+      });
+      yield* Queue.offer(harness.inputs, titleEvent("Legacy", 11));
+      yield* harness.awaitState((value) =>
+        Option.exists(value.data, (thread) => thread.title === "Legacy"),
+      );
+      expect(yield* Ref.get(harness.loaderWindows)).toEqual([
+        { turnLimit: INITIAL_THREAD_USER_TURN_LIMIT },
+      ]);
+      expect(yield* Ref.get(harness.lastSubscribeInput)).not.toHaveProperty(
+        "separateAgentTranscripts",
+      );
+    }),
+  );
+
   for (const reasoningCapability of [false, true]) {
     it.effect(
       `negotiates reasoning for initial, older and socket reads: ${reasoningCapability}`,

@@ -211,6 +211,7 @@ const ProjectionImportedAgentSessionSourcesRowSchema = Schema.Struct({
   runtimePayload: Schema.Unknown,
 });
 const ThreadIdLookupInput = Schema.Struct({
+  separateAgentTranscripts: Schema.optional(Schema.Boolean),
   threadId: ThreadId,
 });
 const TurnStartMessageLookupInput = Schema.Struct({
@@ -244,6 +245,7 @@ const ProjectionTurnWindowRowSchema = Schema.Struct({
   turnKey: Schema.String,
 });
 const ThreadTurnRangeLookupInput = Schema.Struct({
+  separateAgentTranscripts: Schema.optional(Schema.Boolean),
   threadId: ThreadId,
   // Turn-linked rows are bounded by the keyset range [min, before) over
   // (anchor, turn key); turnless rows by the matching [minAnchorAt,
@@ -1409,7 +1411,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
   const listThreadMessageRowsByThread = SqlSchema.findAll({
     Request: ThreadIdLookupInput,
     Result: ProjectionThreadMessageDbRowSchema,
-    execute: ({ threadId }) =>
+    execute: ({ threadId, separateAgentTranscripts }) =>
       sql`
         SELECT
           message_id AS "messageId",
@@ -1425,6 +1427,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           updated_at AS "updatedAt"
         FROM projection_thread_messages
         WHERE thread_id = ${threadId}
+          ${separateAgentTranscripts ? sql`AND agent_id IS NULL` : sql``}
         ORDER BY created_at ASC, message_id ASC
       `,
   });
@@ -1582,11 +1585,17 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
   const listThreadActivityIdsByThread = SqlSchema.findAll({
     Request: ThreadIdLookupInput,
     Result: ProjectionThreadActivityIdRowSchema,
-    execute: ({ threadId }) =>
+    execute: ({ threadId, separateAgentTranscripts }) =>
       sql`
         SELECT activity_id AS "activityId"
         FROM projection_thread_activities
         WHERE thread_id = ${threadId}
+          ${
+            separateAgentTranscripts
+              ? sql`AND NOT (kind IN ('tool.started', 'tool.updated', 'tool.completed')
+            AND COALESCE(length(trim(json_extract(CASE WHEN json_valid(payload_json) THEN payload_json ELSE '{}' END, '$.agentId'))), 0) > 0)`
+              : sql``
+          }
         ORDER BY
           sequence DESC,
           created_at DESC,
@@ -1823,7 +1832,14 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
   const listThreadMessageRowsByThreadWindow = SqlSchema.findAll({
     Request: ThreadTurnRangeLookupInput,
     Result: ProjectionThreadMessageDbRowSchema,
-    execute: ({ threadId, minAnchorAt, minTurnKey, beforeAnchorAt, beforeTurnKey }) =>
+    execute: ({
+      threadId,
+      minAnchorAt,
+      minTurnKey,
+      beforeAnchorAt,
+      beforeTurnKey,
+      separateAgentTranscripts,
+    }) =>
       sql`
         SELECT
           message_id AS "messageId",
@@ -1839,6 +1855,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           updated_at AS "updatedAt"
         FROM projection_thread_messages
         WHERE thread_id = ${threadId}
+          ${separateAgentTranscripts ? sql`AND agent_id IS NULL` : sql``}
           AND (
             turn_id IN (
               SELECT turn_id FROM projection_turns
@@ -2055,11 +2072,24 @@ pending_approval_requests AS (
   const listThreadActivityIdsByThreadWindow = SqlSchema.findAll({
     Request: ThreadTurnRangeLookupInput,
     Result: ProjectionThreadActivityIdRowSchema,
-    execute: ({ threadId, minAnchorAt, minTurnKey, beforeAnchorAt, beforeTurnKey }) =>
+    execute: ({
+      threadId,
+      minAnchorAt,
+      minTurnKey,
+      beforeAnchorAt,
+      beforeTurnKey,
+      separateAgentTranscripts,
+    }) =>
       sql`
         SELECT activity_id AS "activityId"
         FROM projection_thread_activities
         WHERE thread_id = ${threadId}
+          ${
+            separateAgentTranscripts
+              ? sql`AND NOT (kind IN ('tool.started', 'tool.updated', 'tool.completed')
+            AND COALESCE(length(trim(json_extract(CASE WHEN json_valid(payload_json) THEN payload_json ELSE '{}' END, '$.agentId'))), 0) > 0)`
+              : sql``
+          }
           AND (
             turn_id IN (
               SELECT turn_id FROM projection_turns
@@ -3431,16 +3461,21 @@ pending_approval_requests AS (
       }
     | {
         readonly mode: "client";
+        readonly separateAgentTranscripts?: boolean;
       };
 
   const listProjectedThreadActivities = Effect.fn(
     "ProjectionSnapshotQuery.listProjectedThreadActivities",
-  )(function* (threadId: ThreadId, bounds: ThreadDetailBounds | undefined) {
+  )(function* (
+    threadId: ThreadId,
+    bounds: ThreadDetailBounds | undefined,
+    separateAgentTranscripts = false,
+  ) {
     const includeLiveTasks = yield* liveTaskPins.shouldPinLiveTasks(threadId);
     const [activityIdRows, pinnedActivityIdRows] = yield* Effect.all([
       (bounds === undefined
-        ? listThreadActivityIdsByThread({ threadId })
-        : listThreadActivityIdsByThreadWindow({ threadId, ...bounds })
+        ? listThreadActivityIdsByThread({ threadId, separateAgentTranscripts })
+        : listThreadActivityIdsByThreadWindow({ threadId, ...bounds, separateAgentTranscripts })
       ).pipe(
         Effect.mapError(
           toPersistenceSqlOrDecodeError(
@@ -3499,10 +3534,13 @@ pending_approval_requests AS (
     activityRead: ThreadDetailActivityRead = { mode: "raw" },
   ) =>
     Effect.gen(function* () {
-      const includeLiveTasks = yield* liveTaskPins.shouldPinLiveTasks(threadId);
+      const separateAgentTranscripts =
+        activityRead.mode === "client" && activityRead.separateAgentTranscripts === true;
+      const includeLiveTasks =
+        activityRead.mode === "raw" ? yield* liveTaskPins.shouldPinLiveTasks(threadId) : false;
       const activitiesEffect =
         activityRead.mode === "client"
-          ? listProjectedThreadActivities(threadId, bounds)
+          ? listProjectedThreadActivities(threadId, bounds, separateAgentTranscripts)
           : Effect.all([
               (activityRead.query?.activityKinds === undefined
                 ? bounds === undefined
@@ -3570,8 +3608,8 @@ pending_approval_requests AS (
           ),
         ),
         (bounds === undefined
-          ? listThreadMessageRowsByThread({ threadId })
-          : listThreadMessageRowsByThreadWindow({ threadId, ...bounds })
+          ? listThreadMessageRowsByThread({ threadId, separateAgentTranscripts })
+          : listThreadMessageRowsByThreadWindow({ threadId, ...bounds, separateAgentTranscripts })
         ).pipe(
           Effect.mapError(
             toPersistenceSqlOrDecodeError(
@@ -3738,6 +3776,7 @@ pending_approval_requests AS (
           if (window?.turnLimit === undefined) {
             const thread = yield* getThreadDetailByIdBounded(threadId, undefined, {
               mode: "client",
+              separateAgentTranscripts: window?.separateAgentTranscripts === true,
             });
             if (Option.isNone(thread)) {
               return Option.none<OrchestrationThreadDetailSnapshot>();
@@ -3811,6 +3850,7 @@ pending_approval_requests AS (
 
           const thread = yield* getThreadDetailByIdBounded(threadId, emptyBounds ?? bounds, {
             mode: "client",
+            separateAgentTranscripts: window.separateAgentTranscripts === true,
           });
           if (Option.isNone(thread)) {
             return Option.none<OrchestrationThreadDetailSnapshot>();

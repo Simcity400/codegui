@@ -19,6 +19,7 @@ import type { EnvironmentId, ThreadId } from "@t3tools/contracts";
 import { connectionAtomRuntime } from "../../connection/runtime";
 import { useEnvironmentQuery } from "../../state/query";
 import { useEnvironmentThread } from "../../state/threads";
+import { agentObservability, useAgentRoster } from "../../state/agentObservability";
 
 import { deriveTimelineEntries, deriveWorkLogEntries } from "../../session-logic";
 import { Button } from "../ui/button";
@@ -48,7 +49,7 @@ type AgentTranscriptProps = Pick<
   agent: RuntimeSubagent;
   messages: readonly OrchestrationMessage[];
   activities: readonly OrchestrationThreadActivity[];
-  /** The Agents panel is still fetching older pages; hide "no messages" until done. */
+  /** Hide "no messages" while the transcript's initial history is loading. */
   historyPending?: boolean;
 };
 
@@ -134,11 +135,7 @@ type ScopedAgentTranscriptProps = Omit<
   threadId: ThreadId;
 };
 
-/**
- * Renders the agent's transcript: its stored messages plus the thread's loaded
- * rows. Subagent messages and tool calls stream on the root thread, so reading
- * them there avoids a second subscription per transcript.
- */
+/** Load only this agent's history on capable hosts; legacy hosts overlay parent-thread rows. */
 export function ScopedAgentTranscript({
   environmentId,
   threadId,
@@ -147,21 +144,47 @@ export function ScopedAgentTranscript({
 }: ScopedAgentTranscriptProps) {
   const state = useEnvironmentThread(environmentId, threadId);
   const thread = Option.getOrNull(state.data);
+  const roster = useAgentRoster(environmentId, threadId);
+  const transcript = useEnvironmentQuery(
+    roster.supported
+      ? agentObservability.transcript({ environmentId, input: { threadId, agentId: agent.id } })
+      : null,
+  );
   const stored = useEnvironmentQuery(
-    agentMessagesAtom({ environmentId, input: { threadId, agentId: agent.id } }),
+    roster.known && !roster.supported
+      ? agentMessagesAtom({ environmentId, input: { threadId, agentId: agent.id } })
+      : null,
   );
   const liveMessages = thread?.messages ?? EMPTY_MESSAGES;
   const messages = useMemo(
-    () => mergeAgentMessages(stored.data?.messages ?? null, liveMessages, agent.id),
-    [stored.data, liveMessages, agent.id],
+    () =>
+      roster.supported
+        ? (transcript.data?.messages ?? EMPTY_MESSAGES)
+        : mergeAgentMessages(stored.data?.messages ?? null, liveMessages, agent.id),
+    [roster.supported, transcript.data, stored.data, liveMessages, agent.id],
   );
+  const error = roster.supported ? transcript.error : stored.error;
+  if (error !== null)
+    return (
+      <div role="alert" className="p-4 text-sm text-muted-foreground">
+        {error}
+      </div>
+    );
   return (
     <AgentTranscript
       agent={agent}
       messages={messages}
-      activities={thread?.activities ?? EMPTY_ACTIVITIES}
-      historyPending={threadHasOlderTurns(state) || stored.isPending}
+      activities={
+        (roster.supported ? transcript.data?.activities : thread?.activities) ?? EMPTY_ACTIVITIES
+      }
+      historyPending={
+        !roster.known ||
+        (roster.supported
+          ? transcript.data === null
+          : threadHasOlderTurns(state) || stored.isPending)
+      }
       {...props}
+      {...(roster.model === null ? {} : { agentPanelModel: roster.model })}
     />
   );
 }

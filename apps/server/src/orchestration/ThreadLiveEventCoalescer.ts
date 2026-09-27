@@ -19,6 +19,7 @@ const COALESCE_WINDOW = Duration.millis(50);
 const MAX_PENDING_UPDATES = 512;
 
 export type ThreadLiveInput =
+  | { readonly kind: "cursor"; readonly sequence: number }
   | { readonly kind: "event"; readonly event: OrchestrationEvent }
   | { readonly kind: "synchronized" };
 
@@ -191,8 +192,8 @@ export const makeThreadLiveEventCoalescer = Effect.fn("makeThreadLiveEventCoales
               // A non-update event closes the run immediately. The coalescer keeps
               // that boundary after the final update from the run.
               yield* flushPending();
-              if (input.kind === "synchronized") {
-                yield* budget.retain({ kind: "synchronized" as const }).pipe(
+              if (input.kind === "synchronized" || input.kind === "cursor") {
+                yield* budget.retain(input).pipe(
                   Effect.flatMap((marker) => Queue.offer(output, marker)),
                   Effect.uninterruptible,
                 );

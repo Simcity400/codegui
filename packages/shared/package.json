@@ -346,6 +346,10 @@
     "./gitPatchPath": {
       "types": "./src/gitPatchPath.ts",
       "import": "./src/gitPatchPath.ts"
+    },
+    "./agentTranscripts": {
+      "types": "./src/agentTranscripts.ts",
+      "import": "./src/agentTranscripts.ts"
     }
   },
   "scripts": {

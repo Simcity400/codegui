@@ -42,6 +42,7 @@ import {
 
 import { cn } from "~/lib/utils";
 import { orchestrationEnvironment } from "~/state/orchestration";
+import { useAgentRoster } from "~/state/agentObservability";
 import { useEnvironmentThread } from "~/state/threads";
 import { ScrollArea } from "~/components/ui/scroll-area";
 import { Button } from "~/components/ui/button";
@@ -832,12 +833,14 @@ function AgentRosterSection({
 }
 
 /**
- * The roster and transcripts read the thread's loaded rows, and a thread
- * opens with only its latest turns. While the panel is open, fetch every
- * older page so no agent or transcript is missing. Returns true until the
- * full history is loaded.
+ * Legacy hosts have no separate roster. Only those hosts need older thread
+ * pages to recover agents outside the initial window.
  */
-function useFullThreadHistory(environmentId: EnvironmentId | null, threadId: ThreadId | null) {
+function useFullThreadHistory(
+  environmentId: EnvironmentId | null,
+  threadId: ThreadId | null,
+  enabled: boolean,
+) {
   const state = useEnvironmentThread(environmentId, threadId);
   const page = Option.getOrNull(state.page);
   const hasOlder = threadHasOlderTurns(state);
@@ -845,18 +848,18 @@ function useFullThreadHistory(environmentId: EnvironmentId | null, threadId: Thr
   const cursor = page?.beforeCursor ?? null;
   const requested = useRef<string | null>(null);
   useEffect(() => {
-    if (environmentId === null || threadId === null || !hasOlder || loading) return;
+    if (!enabled || environmentId === null || threadId === null || !hasOlder || loading) return;
     // One request per cursor: a failed page leaves the cursor unchanged, so it is not retried in a loop.
     const key = `${environmentId}:${threadId}:${cursor}`;
     if (requested.current === key) return;
     requested.current = key;
     requestOlderThreadTurns(environmentId, threadId);
-  }, [cursor, environmentId, hasOlder, loading, threadId]);
-  return hasOlder;
+  }, [cursor, environmentId, hasOlder, loading, threadId, enabled]);
+  return enabled && hasOlder;
 }
 
 export function AgentsPanel({
-  model,
+  model: loadedModel,
   environmentId = null,
   threadId = null,
   renderTranscript,
@@ -870,7 +873,18 @@ export function AgentsPanel({
     controls: { readonly openRoster: () => void },
   ) => ReactNode;
 }) {
-  const historyPending = useFullThreadHistory(environmentId, threadId);
+  const roster = useAgentRoster(environmentId, threadId);
+  const model = roster.model ?? loadedModel;
+  const legacyHistoryPending = useFullThreadHistory(
+    environmentId,
+    threadId,
+    roster.known && !roster.supported,
+  );
+  const historyPending =
+    environmentId !== null &&
+    threadId !== null &&
+    (!roster.known ||
+      (roster.supported ? roster.data === null && roster.error === null : legacyHistoryPending));
   const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null);
   const openTranscript = useCallback((agent: RuntimeSubagent) => setSelectedAgentId(agent.id), []);
   const transcriptControls = useMemo(() => ({ openRoster: () => setSelectedAgentId(null) }), []);
@@ -1001,6 +1015,13 @@ export function AgentsPanel({
       }
       return next;
     });
+  }
+  if (roster.error !== null) {
+    return (
+      <div role="alert" className="p-4 text-sm text-muted-foreground">
+        {roster.error}
+      </div>
+    );
   }
   if (!model.hasAgents) {
     return (

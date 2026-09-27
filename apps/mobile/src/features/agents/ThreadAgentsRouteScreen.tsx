@@ -1,5 +1,7 @@
 import type { LegendListRef } from "@legendapp/list/react-native";
-import { useNavigation, type StaticScreenProps } from "@react-navigation/native";
+import { useAtomValue } from "@effect/atom-react";
+import { useIsFocused, useNavigation, type StaticScreenProps } from "@react-navigation/native";
+import { createAgentObservabilityAtoms } from "@t3tools/client-runtime/state/agent-observability";
 import {
   deriveAgentTranscriptTurn,
   mergeAgentMessages,
@@ -44,13 +46,15 @@ import { useRemoteEnvironmentRuntime } from "../../state/use-remote-environment-
 import { useEnvironmentQuery } from "../../state/query";
 import { useThreadDetail } from "../../state/use-thread-detail";
 import { useEnvironmentThread } from "../../state/threads";
-import { useProject } from "../../state/entities";
+import { useEnvironmentServerConfig, useProject } from "../../state/entities";
+import { environmentSession } from "../../state/session";
 import { ThreadFeed } from "../threads/ThreadFeed";
 import { projectThreadContentPresentation } from "../threads/threadContentPresentation";
 
 import { buildAgentListRows } from "./agentListRows";
 
 type ThreadParams = { readonly environmentId: string; readonly threadId: string };
+const agentObservability = createAgentObservabilityAtoms(connectionAtomRuntime);
 
 // Thread pages leave finished subagent messages out; a transcript loads them
 // each time it opens and overlays the live rows.
@@ -64,7 +68,20 @@ const agentMessagesAtom = createEnvironmentRpcQueryAtomFamily(connectionAtomRunt
 function useAgentThread(params: ThreadParams) {
   const environmentId = EnvironmentId.make(params.environmentId);
   const threadId = ThreadId.make(params.threadId);
-  const state = useThreadDetail({ environmentId, threadId });
+  const focused = useIsFocused();
+  const cachedConfig = useEnvironmentServerConfig(environmentId);
+  const sessionConfig = useAtomValue(environmentSession.initialConfigValueAtom(environmentId));
+  const config = sessionConfig ?? cachedConfig;
+  const separateTranscripts = config?.separateAgentTranscripts === true;
+  const roster = useEnvironmentQuery(
+    focused && separateTranscripts
+      ? agentObservability.roster({ environmentId, input: { threadId } })
+      : null,
+  );
+  const state = useThreadDetail({
+    environmentId: focused ? environmentId : null,
+    threadId: focused ? threadId : null,
+  });
   const thread = Option.getOrNull(state.data);
   const project = useProject(thread ? { environmentId, projectId: thread.projectId } : null);
   const workspaceRoot = thread?.worktreePath ?? project?.workspaceRoot ?? null;
@@ -73,31 +90,35 @@ function useAgentThread(params: ThreadParams) {
   // Shared with desktop so the same thread never reads live here and stopped there.
   const sessionLive = isSubagentSessionLive(thread?.session);
   const { agents, backgroundTasks } = useMemo(
-    () => foldThreadTasks(activities ?? [], { sessionLive }),
-    [activities, sessionLive],
+    () => roster.data ?? foldThreadTasks(activities ?? [], { sessionLive }),
+    [roster.data, activities, sessionLive],
   );
   const presentation = projectThreadContentPresentation({
-    hasDetail: thread !== null,
-    detailError: Option.getOrNull(state.error),
+    hasDetail: separateTranscripts ? roster.data !== null : thread !== null,
+    detailError: roster.error ?? Option.getOrNull(state.error),
     detailDeleted: state.status === "deleted",
     connectionState: runtime?.connectionState ?? "available",
   });
-  // The roster and transcripts read the thread's loaded rows, and a thread
-  // opens with only its latest turns. Fetch every older page while an agents
-  // screen is open, so no agent or transcript is missing.
-  const historyPending = threadHasOlderTurns(state);
+  // Legacy hosts need older thread pages to recover the complete roster.
+  // Hidden screens must never start this work on reconnect.
+  const legacyHistory = sessionConfig !== null && !separateTranscripts;
+  const historyPending =
+    config === null ||
+    (separateTranscripts
+      ? roster.data === null && roster.error === null
+      : threadHasOlderTurns(state));
   const page = Option.getOrNull(state.page);
   const loadingOlder = page?.loadingOlder === true;
   const cursor = page?.beforeCursor ?? null;
   const requestedCursor = useRef<string | null>(null);
   useEffect(() => {
-    if (!historyPending || loadingOlder) return;
+    if (!focused || !legacyHistory || !historyPending || loadingOlder) return;
     // One request per cursor: a failed page leaves the cursor unchanged, so it is not retried in a loop.
     const key = `${environmentId}:${threadId}:${cursor}`;
     if (requestedCursor.current === key) return;
     requestedCursor.current = key;
     requestOlderThreadTurns(environmentId, threadId);
-  }, [cursor, environmentId, historyPending, loadingOlder, threadId]);
+  }, [cursor, environmentId, historyPending, loadingOlder, threadId, focused, legacyHistory]);
   return {
     environmentId,
     threadId,
@@ -107,6 +128,9 @@ function useAgentThread(params: ThreadParams) {
     presentation,
     historyPending,
     workspaceRoot,
+    focused,
+    separateTranscripts,
+    legacyHistory,
   };
 }
 
@@ -352,33 +376,56 @@ export function ThreadAgentsRouteScreen(props: StaticScreenProps<ThreadParams>) 
 export function ThreadAgentTranscriptRouteScreen(
   props: StaticScreenProps<ThreadParams & { readonly agentId: string }>,
 ) {
-  const { environmentId, threadId, agents, workspaceRoot } = useAgentThread(props.route.params);
+  const {
+    environmentId,
+    threadId,
+    agents,
+    workspaceRoot,
+    focused,
+    separateTranscripts,
+    legacyHistory,
+  } = useAgentThread(props.route.params);
   const agentId = props.route.params.agentId;
   const agent = agents.find((entry) => entry.id === agentId);
-  // Agents stream on the root thread, so the transcript reads there instead
-  // of opening a second full subscription.
-  const scopedState = useEnvironmentThread(environmentId, threadId);
+  // Keep the parent thread for metadata and the legacy transcript fallback.
+  const scopedState = useEnvironmentThread(
+    focused ? environmentId : null,
+    focused ? threadId : null,
+  );
   const scopedThread = Option.getOrNull(scopedState.data);
   const runtime = useRemoteEnvironmentRuntime(environmentId);
+  const transcript = useEnvironmentQuery(
+    focused && separateTranscripts
+      ? agentObservability.transcript({ environmentId, input: { threadId, agentId } })
+      : null,
+  );
+  const stored = useEnvironmentQuery(
+    focused && legacyHistory
+      ? agentMessagesAtom({ environmentId, input: { threadId, agentId } })
+      : null,
+  );
   const presentation = projectThreadContentPresentation({
-    hasDetail: scopedThread !== null,
-    detailError: Option.getOrNull(scopedState.error),
+    hasDetail: separateTranscripts
+      ? transcript.data !== null
+      : scopedThread !== null && stored.data !== null,
+    detailError:
+      (separateTranscripts ? transcript.error : stored.error) ??
+      Option.getOrNull(scopedState.error),
     detailDeleted: scopedState.status === "deleted",
     connectionState: runtime?.connectionState ?? "available",
   });
-  const stored = useEnvironmentQuery(
-    agentMessagesAtom({ environmentId, input: { threadId, agentId } }),
-  );
-  const liveMessages = scopedThread?.messages;
-  const activities = scopedThread?.activities;
+  const liveMessages = separateTranscripts ? transcript.data?.messages : scopedThread?.messages;
+  const activities = separateTranscripts ? transcript.data?.activities : scopedThread?.activities;
   const scoped = useMemo(
     () =>
       selectAgentTranscript(
-        mergeAgentMessages(stored.data?.messages ?? null, liveMessages ?? [], agentId),
+        separateTranscripts
+          ? (liveMessages ?? [])
+          : mergeAgentMessages(stored.data?.messages ?? null, liveMessages ?? [], agentId),
         activities ?? [],
         agentId,
       ),
-    [stored.data, liveMessages, activities, agentId],
+    [separateTranscripts, stored.data, liveMessages, activities, agentId],
   );
   const feed = useMemo(() => buildThreadFeed(scoped), [scoped]);
   const turn = useMemo(() => deriveAgentTranscriptTurn(scoped, agent), [scoped, agent]);

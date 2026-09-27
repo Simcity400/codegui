@@ -32,6 +32,7 @@ import { SessionStore } from "../auth/SessionStore.ts";
 import { ProjectionSnapshotQuery } from "../orchestration/Services/ProjectionSnapshotQuery.ts";
 import { OrchestrationEngineService } from "../orchestration/Services/OrchestrationEngine.ts";
 import { DirectPush, layer } from "./DirectPush.ts";
+import { writeFileStringAtomically } from "../atomicWrite.ts";
 import {
   ApplePushConfiguration,
   type ApplePushMessage,
@@ -47,7 +48,12 @@ vi.mock("./applePush.ts", async (original) => ({
   ...(await original<object>()),
   createApplePushSender: createSender,
 }));
+vi.mock("../atomicWrite.ts", async (original) => {
+  const module = await original<typeof import("../atomicWrite.ts")>();
+  return { ...module, writeFileStringAtomically: vi.fn(module.writeFileStringAtomically) };
+});
 beforeEach(() => {
+  vi.mocked(writeFileStringAtomically).mockClear();
   send.mockReset();
   createSender.mockReset();
   createSender.mockReturnValue(send);
@@ -214,6 +220,7 @@ it.effect("verifies a new notification token with Apple once and registers silen
       }),
     );
     expect(send).toHaveBeenCalledTimes(1);
+    expect(writeFileStringAtomically).toHaveBeenCalledTimes(1);
     expect(send).toHaveBeenCalledWith(
       expect.objectContaining({ kind: "background", payload: { aps: { "content-available": 1 } } }),
     );

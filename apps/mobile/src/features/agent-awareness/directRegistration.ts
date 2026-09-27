@@ -23,6 +23,7 @@ const activities = new Map<string, LiveActivity<AgentActivityProps>>();
 const tokenListeners = new Map<string, { remove: () => void }>();
 const listeners = new Set<() => void>();
 let restored = false;
+let persistedActivityIds: string | null = null;
 let pending: Promise<void> | null = null;
 let refreshAgain = false;
 let observedPushToken: string | null = null;
@@ -80,6 +81,7 @@ const authorizationHeaders = Effect.fnUntraced(function* (
 async function restoreActivities() {
   if (restored) return;
   const saved = await SecureStore.getItemAsync(ACTIVITY_IDS_KEY);
+  persistedActivityIds = saved;
   let ids: unknown = {};
   try {
     ids = saved ? JSON.parse(saved) : {};
@@ -104,14 +106,14 @@ async function restoreActivities() {
 }
 
 async function persistActivities() {
-  await SecureStore.setItemAsync(
-    ACTIVITY_IDS_KEY,
-    JSON.stringify(
-      Object.fromEntries(
-        [...activities].map(([environmentId, activity]) => [environmentId, activity.getId()]),
-      ),
+  const value = JSON.stringify(
+    Object.fromEntries(
+      [...activities].map(([environmentId, activity]) => [environmentId, activity.getId()]),
     ),
   );
+  if (value === persistedActivityIds) return;
+  await SecureStore.setItemAsync(ACTIVITY_IDS_KEY, value);
+  persistedActivityIds = value;
 }
 
 async function refreshNow() {

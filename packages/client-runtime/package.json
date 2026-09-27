@@ -3,6 +3,10 @@
   "private": true,
   "type": "module",
   "exports": {
+    "./state/agent-observability": {
+      "types": "./src/state/agentObservability.ts",
+      "default": "./src/state/agentObservability.ts"
+    },
     "./device/stream": {
       "types": "./src/device/stream.ts",
       "default": "./src/device/stream.ts"

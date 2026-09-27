@@ -123,6 +123,13 @@ export const ensureForkColumns = Effect.fn("ensureForkColumns")(function* () {
       if (activityColumns.length > 0) {
         yield* sql`CREATE INDEX IF NOT EXISTS idx_projection_thread_activities_thread_kind
           ON projection_thread_activities (thread_id, kind)`;
+        yield* sql`CREATE INDEX IF NOT EXISTS idx_fork_activity_agent
+          ON projection_thread_activities (thread_id, json_extract(CASE WHEN json_valid(payload_json) THEN payload_json ELSE '{}' END, '$.agentId'), sequence, created_at, activity_id)`;
+        // The fork's opt-in parent read skips child tools before applying upstream's activity limit.
+        yield* sql`CREATE INDEX IF NOT EXISTS idx_fork_activity_parent
+          ON projection_thread_activities (thread_id, sequence, created_at, activity_id)
+          WHERE NOT (kind IN ('tool.started', 'tool.updated', 'tool.completed')
+            AND COALESCE(length(trim(json_extract(CASE WHEN json_valid(payload_json) THEN payload_json ELSE '{}' END, '$.agentId'))), 0) > 0)`;
       }
     }),
   );
