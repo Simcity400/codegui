@@ -1,15 +1,10 @@
-import { HostProcessArchitecture, HostProcessPlatform } from "@t3tools/shared/hostProcess";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
 
-import { app } from "electron";
 import { autoUpdater } from "electron-updater";
-import { configureWindowsUpdateSelection } from "../updates/windowsUpdateSelection.ts";
-
-let windowsSelectionConfigured = false;
 
 type AutoUpdater = typeof autoUpdater;
 
@@ -128,17 +123,9 @@ export const make = ElectronUpdater.of({
       autoUpdater.disableDifferentialDownload = value;
       return Effect.void;
     }),
-  checkForUpdates: Effect.gen(function* () {
-    const platform = yield* HostProcessPlatform;
-    const arch = yield* HostProcessArchitecture;
-    if (platform === "win32" && !windowsSelectionConfigured) {
-      // Recover native ARM updates even if an older updater installed an x64 build.
-      const updateArch = app.runningUnderARM64Translation ? "arm64" : arch;
-      configureWindowsUpdateSelection(autoUpdater, updateArch);
-      windowsSelectionConfigured = true;
-    }
+  checkForUpdates: Effect.suspend(() => {
     const channel = autoUpdater.channel;
-    return yield* Effect.tryPromise({
+    return Effect.tryPromise({
       try: () => autoUpdater.checkForUpdates(),
       catch: (cause) => new ElectronUpdaterCheckForUpdatesError({ channel, cause }),
     }).pipe(Effect.asVoid);

@@ -1,4 +1,3 @@
-import IconTarget from "@tabler/icons-react-native/IconTarget";
 import type { Icon } from "@tabler/icons-react-native/types";
 /*
  * Keep these as per-icon exports. Importing the package root eagerly registers
@@ -14,12 +13,14 @@ import IconArrowBackUp from "@tabler/icons-react-native/IconArrowBackUp";
 import IconArrowDown from "@tabler/icons-react-native/IconArrowDown";
 import IconArrowForwardUp from "@tabler/icons-react-native/IconArrowForwardUp";
 import IconArrowLeft from "@tabler/icons-react-native/IconArrowLeft";
+import IconArrowRight from "@tabler/icons-react-native/IconArrowRight";
 import IconArrowDownCircle from "@tabler/icons-react-native/IconArrowDownCircle";
 import IconArrowRightCircle from "@tabler/icons-react-native/IconArrowRightCircle";
 import IconArrowUp from "@tabler/icons-react-native/IconArrowUp";
 import IconArrowUpCircle from "@tabler/icons-react-native/IconArrowUpCircle";
 import IconArrowUpRight from "@tabler/icons-react-native/IconArrowUpRight";
 import IconArrowUpRightCircle from "@tabler/icons-react-native/IconArrowUpRightCircle";
+import IconArrowsLeftRight from "@tabler/icons-react-native/IconArrowsLeftRight";
 import IconArrowsDiagonal2 from "@tabler/icons-react-native/IconArrowsDiagonal2";
 import IconArrowsMinimize from "@tabler/icons-react-native/IconArrowsMinimize";
 import IconBellRinging from "@tabler/icons-react-native/IconBellRinging";
@@ -72,6 +73,7 @@ import IconLayoutSidebarRight from "@tabler/icons-react-native/IconLayoutSidebar
 import IconLetterSpacing from "@tabler/icons-react-native/IconLetterSpacing";
 import IconMicrophone from "@tabler/icons-react-native/IconMicrophone";
 import IconLink from "@tabler/icons-react-native/IconLink";
+import IconListNumbers from "@tabler/icons-react-native/IconListNumbers";
 import IconMenu2 from "@tabler/icons-react-native/IconMenu2";
 import IconMessage from "@tabler/icons-react-native/IconMessage";
 import IconMinus from "@tabler/icons-react-native/IconMinus";
@@ -87,7 +89,6 @@ import IconPlayerStopFilled from "@tabler/icons-react-native/IconPlayerStopFille
 import IconPlus from "@tabler/icons-react-native/IconPlus";
 import IconQrcode from "@tabler/icons-react-native/IconQrcode";
 import IconRefresh from "@tabler/icons-react-native/IconRefresh";
-import IconRobot from "@tabler/icons-react-native/IconRobot";
 import IconSearch from "@tabler/icons-react-native/IconSearch";
 import IconServer from "@tabler/icons-react-native/IconServer";
 import IconSettings from "@tabler/icons-react-native/IconSettings";
@@ -105,6 +106,7 @@ import IconTrash from "@tabler/icons-react-native/IconTrash";
 import IconTypography from "@tabler/icons-react-native/IconTypography";
 import IconUpload from "@tabler/icons-react-native/IconUpload";
 import IconUserCircle from "@tabler/icons-react-native/IconUserCircle";
+import IconUsers from "@tabler/icons-react-native/IconUsers";
 import IconWifiOff from "@tabler/icons-react-native/IconWifiOff";
 import IconWorld from "@tabler/icons-react-native/IconWorld";
 import IconX from "@tabler/icons-react-native/IconX";
@@ -114,11 +116,14 @@ import { withUniwind } from "uniwind";
 const ANDROID_ICON_BY_SF_SYMBOL = {
   "arrow.branch": IconGitBranch,
   "arrow.left": IconArrowLeft,
+  "arrow.right": IconArrowRight,
+  "arrow.left.arrow.right": IconArrowsLeftRight,
   "arrow.clockwise": IconRefresh,
   "arrow.down": IconArrowDown,
   "arrow.down.circle": IconArrowDownCircle,
   "arrow.right.circle": IconArrowRightCircle,
   "arrow.triangle.branch": IconGitBranch,
+  "arrow.triangle.merge": IconGitMerge,
   "arrow.triangle.pull": IconGitPullRequest,
   "square.3.layers.3d": IconStack2,
   "arrow.turn.left.up": IconArrowBackUp,
@@ -130,7 +135,6 @@ const ANDROID_ICON_BY_SF_SYMBOL = {
   "arrow.up.right.circle": IconArrowUpRightCircle,
   "arrow.uturn.backward": IconArrowBackUp,
   "arrow.uturn.forward": IconArrowForwardUp,
-  target: IconTarget,
   archivebox: IconArchive,
   "archivebox.fill": IconArchive,
   "bell.badge": IconBellRinging,
@@ -153,6 +157,7 @@ const ANDROID_ICON_BY_SF_SYMBOL = {
   "chevron.right": IconChevronRight,
   "chevron.up": IconChevronUp,
   desktopcomputer: IconDeviceDesktop,
+  doc: IconFileText,
   "doc.on.doc": IconCopy,
   "doc.text": IconFileText,
   ellipsis: IconDots,
@@ -173,6 +178,7 @@ const ANDROID_ICON_BY_SF_SYMBOL = {
   keyboard: IconKeyboard,
   laptopcomputer: IconDeviceLaptop,
   link: IconLink,
+  "list.number": IconListNumbers,
   "line.3.horizontal": IconMenu2,
   "line.3.horizontal.decrease": IconFilter,
   "line.3.horizontal.decrease.circle": IconFilter,
@@ -185,6 +191,7 @@ const ANDROID_ICON_BY_SF_SYMBOL = {
   paintbrush: IconPalette,
   pencil: IconPencil,
   "person.crop.circle": IconUserCircle,
+  "person.2": IconUsers,
   photo: IconPhoto,
   pin: IconPin,
   "pin.slash": IconPinnedOff,
@@ -231,6 +238,7 @@ const ANDROID_ICON_BY_MATERIAL_NAME = {
   auto_awesome: IconSparkles,
   bolt: IconBolt,
   build: IconTool,
+  chat: IconMessage,
   chat_bubble: IconMessage,
   check: IconCheck,
   close: IconX,
@@ -248,10 +256,10 @@ const ANDROID_ICON_BY_MATERIAL_NAME = {
   lock: IconLock,
   more_vert: IconDotsVertical,
   merge: IconGitMerge,
+  psychology: IconBrain,
   public: IconWorld,
   remove: IconMinus,
   smartphone: IconDeviceMobile,
-  smart_toy: IconRobot,
   terminal: IconTerminal2,
   visibility: IconEye,
 } satisfies Partial<Record<AndroidSymbol, Icon>>;

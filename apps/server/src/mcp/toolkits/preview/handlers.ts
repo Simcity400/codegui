@@ -1,6 +1,5 @@
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
-import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import {
   PROVIDER_SEND_TURN_MAX_FILE_BYTES,
@@ -84,16 +83,11 @@ const invoke = Effect.fn("PreviewToolkit.invoke")(function* <A>(
       scope,
       operation: "status",
       input: {},
+      timeoutMs: 500,
       updateCurrentTab: false,
       ...(statusTabId === undefined ? {} : { tabId: statusTabId }),
     })
-    .pipe(
-      // An icon lookup's short deadline must not evict the browser: broker
-      // response timeouts disconnect the client and can route the next action elsewhere.
-      Effect.timeoutOption(500),
-      Effect.map(Option.getOrNull),
-      Effect.orElseSucceed(() => null),
-    );
+    .pipe(Effect.orElseSucceed(() => null));
   return {
     result,
     ...(page?.url && /^https?:\/\//i.test(page.url) && page.url.length <= 4096

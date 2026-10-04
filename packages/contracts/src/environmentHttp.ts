@@ -25,19 +25,23 @@ import {
   ServerAuthSessionMethod,
 } from "./auth.ts";
 import {
+  ExecutionEnvironmentDescriptor,
+  ORCHESTRATION_PROTOCOL_HEADER,
+  ORCHESTRATION_PROTOCOL_VERSION_TEXT,
+} from "./environment.ts";
+import {
   DpopFailureReason,
   AuthSessionId,
   ThreadId,
   TrimmedNonEmptyString,
 } from "./baseSchemas.ts";
-import { ExecutionEnvironmentDescriptor } from "./environment.ts";
 import {
-  ClientOrchestrationCommand,
-  DispatchResult,
-  OrchestrationReadModel,
-  OrchestrationShellSnapshot,
-  OrchestrationThreadDetailSnapshot,
-} from "./orchestration.ts";
+  OrchestrationV2ShellSnapshot,
+  OrchestrationV2ThreadBoundedSnapshot,
+  OrchestrationV2ThreadDetailSnapshot,
+  OrchestrationV2ThreadHistoryPage,
+} from "./orchestrationV2.ts";
+import { Project, ProjectMutation, ProjectSnapshot } from "./project.ts";
 import {
   PullRequestDiffInput,
   PullRequestDiffResult,
@@ -52,12 +56,17 @@ import {
   RelayEnvironmentLinkProof,
   RelayEnvironmentMintResponse,
   RelayLinkProofRequest,
-  RelayAgentActivityAggregateState,
 } from "./relay.ts";
 
 const OptionalBearerHeaders = Schema.Struct({
   authorization: Schema.optionalKey(Schema.String),
   dpop: Schema.optionalKey(Schema.String),
+});
+
+const OrchestrationProtocolHeaders = Schema.Struct({
+  authorization: Schema.optionalKey(Schema.String),
+  dpop: Schema.optionalKey(Schema.String),
+  [ORCHESTRATION_PROTOCOL_HEADER]: Schema.Literal(ORCHESTRATION_PROTOCOL_VERSION_TEXT),
 });
 
 const OptionalDpopProofHeaders = Schema.Struct({
@@ -68,6 +77,7 @@ export const EnvironmentRequestInvalidReason = Schema.Literals([
   "invalid_scope",
   "scope_not_granted",
   "invalid_command",
+  "invalid_history_cursor",
 ]);
 export type EnvironmentRequestInvalidReason = typeof EnvironmentRequestInvalidReason.Type;
 
@@ -93,9 +103,12 @@ export const EnvironmentInternalErrorReason = Schema.Literals([
   "pairing_link_revoke_failed",
   "client_sessions_load_failed",
   "client_session_revoke_failed",
+  "project_snapshot_failed",
+  "project_mutation_failed",
   "orchestration_snapshot_failed",
   "orchestration_thread_snapshot_failed",
-  "orchestration_dispatch_failed",
+  "orchestration_thread_bounded_snapshot_failed",
+  "orchestration_thread_history_failed",
   "internal_error",
 ]);
 export type EnvironmentInternalErrorReason = typeof EnvironmentInternalErrorReason.Type;
@@ -324,6 +337,10 @@ const EnvironmentSessionRevokeErrors = [
   EnvironmentOperationForbiddenError,
   EnvironmentInternalError,
 ] as const;
+const EnvironmentProjectSnapshotErrors = [
+  EnvironmentScopeRequiredError,
+  EnvironmentInternalError,
+] as const;
 const EnvironmentOrchestrationSnapshotErrors = [
   EnvironmentScopeRequiredError,
   EnvironmentInternalError,
@@ -333,7 +350,7 @@ const EnvironmentOrchestrationThreadSnapshotErrors = [
   EnvironmentResourceNotFoundError,
   EnvironmentInternalError,
 ] as const;
-const EnvironmentOrchestrationDispatchErrors = [
+const EnvironmentProjectMutationErrors = [
   EnvironmentRequestInvalidError,
   EnvironmentScopeRequiredError,
   EnvironmentInternalError,
@@ -495,48 +512,65 @@ const EnvironmentOrchestrationThreadSnapshotParams = Schema.Struct({
   threadId: ThreadId,
 });
 
-// Query-string window for windowed thread snapshots (GET payloads must encode
-// to strings). Both fields optional: omitting them keeps the full-snapshot
-// behavior, so pagination stays opt-in per request.
-const EnvironmentOrchestrationThreadSnapshotQuery = {
-  separateAgentTranscripts: Schema.optional(Schema.Literal("true")),
-  reasoningMessages: Schema.optional(Schema.Literal("true")),
-  turnLimit: Schema.optional(
-    Schema.FiniteFromString.check(Schema.isInt(), Schema.isGreaterThanOrEqualTo(1)),
-  ),
-  beforeCursor: Schema.optional(TrimmedNonEmptyString),
-};
+const EnvironmentOrchestrationThreadHistoryQuery = Schema.Struct({
+  cursor: TrimmedNonEmptyString,
+});
 
-export class EnvironmentOrchestrationHttpApi extends HttpApiGroup.make("orchestration")
-  .add(
-    HttpApiEndpoint.get("snapshot", "/api/orchestration/snapshot", {
-      headers: OptionalBearerHeaders,
-      success: OrchestrationReadModel,
-      error: EnvironmentOrchestrationSnapshotErrors,
-    }).middleware(EnvironmentAuthenticatedAuth),
-  )
+const EnvironmentOrchestrationThreadHistoryErrors = [
+  EnvironmentRequestInvalidError,
+  EnvironmentScopeRequiredError,
+  EnvironmentResourceNotFoundError,
+  EnvironmentInternalError,
+] as const;
+
+class EnvironmentOrchestrationHttpApi extends HttpApiGroup.make("orchestration")
   .add(
     HttpApiEndpoint.get("shellSnapshot", "/api/orchestration/shell", {
-      headers: OptionalBearerHeaders,
-      success: OrchestrationShellSnapshot,
+      headers: OrchestrationProtocolHeaders,
+      success: OrchestrationV2ShellSnapshot,
       error: EnvironmentOrchestrationSnapshotErrors,
     }).middleware(EnvironmentAuthenticatedAuth),
   )
   .add(
     HttpApiEndpoint.get("threadSnapshot", "/api/orchestration/threads/:threadId", {
-      headers: OptionalBearerHeaders,
+      headers: OrchestrationProtocolHeaders,
       params: EnvironmentOrchestrationThreadSnapshotParams,
-      payload: EnvironmentOrchestrationThreadSnapshotQuery,
-      success: OrchestrationThreadDetailSnapshot,
+      success: OrchestrationV2ThreadDetailSnapshot,
       error: EnvironmentOrchestrationThreadSnapshotErrors,
     }).middleware(EnvironmentAuthenticatedAuth),
   )
   .add(
-    HttpApiEndpoint.post("dispatch", "/api/orchestration/dispatch", {
+    HttpApiEndpoint.get("threadBoundedSnapshot", "/api/orchestration/threads/:threadId/bounded", {
+      headers: OrchestrationProtocolHeaders,
+      params: EnvironmentOrchestrationThreadSnapshotParams,
+      success: OrchestrationV2ThreadBoundedSnapshot,
+      error: EnvironmentOrchestrationThreadSnapshotErrors,
+    }).middleware(EnvironmentAuthenticatedAuth),
+  )
+  .add(
+    HttpApiEndpoint.get("threadHistoryPage", "/api/orchestration/threads/:threadId/history", {
+      headers: OrchestrationProtocolHeaders,
+      params: EnvironmentOrchestrationThreadSnapshotParams,
+      query: EnvironmentOrchestrationThreadHistoryQuery,
+      success: OrchestrationV2ThreadHistoryPage,
+      error: EnvironmentOrchestrationThreadHistoryErrors,
+    }).middleware(EnvironmentAuthenticatedAuth),
+  ) {}
+
+class EnvironmentProjectsHttpApi extends HttpApiGroup.make("projects")
+  .add(
+    HttpApiEndpoint.get("snapshot", "/api/projects", {
       headers: OptionalBearerHeaders,
-      payload: ClientOrchestrationCommand,
-      success: DispatchResult,
-      error: EnvironmentOrchestrationDispatchErrors,
+      success: ProjectSnapshot,
+      error: EnvironmentProjectSnapshotErrors,
+    }).middleware(EnvironmentAuthenticatedAuth),
+  )
+  .add(
+    HttpApiEndpoint.post("mutate", "/api/projects/mutate", {
+      headers: OptionalBearerHeaders,
+      payload: ProjectMutation,
+      success: Project,
+      error: EnvironmentProjectMutationErrors,
     }).middleware(EnvironmentAuthenticatedAuth),
   ) {}
 
@@ -617,46 +651,10 @@ class EnvironmentConnectHttpApi extends HttpApiGroup.make("connect")
     }),
   ) {}
 
-export const DirectPushRegistration = Schema.Struct({
-  deviceId: TrimmedNonEmptyString,
-  bundleId: TrimmedNonEmptyString,
-  apsEnvironment: Schema.Literals(["sandbox", "production"]),
-  pushToken: Schema.NullOr(Schema.String.check(Schema.isPattern(/^[a-fA-F0-9]{32,512}$/))),
-  activityPushToken: Schema.NullOr(Schema.String.check(Schema.isPattern(/^[a-fA-F0-9]{32,512}$/))),
-  notificationsEnabled: Schema.Boolean,
-  liveActivitiesEnabled: Schema.Boolean,
-});
-export type DirectPushRegistration = typeof DirectPushRegistration.Type;
-
-export const DirectPushStatus = Schema.Struct({
-  configured: Schema.Boolean,
-  aggregate: Schema.NullOr(RelayAgentActivityAggregateState),
-  deliveryError: Schema.NullOr(Schema.String),
-});
-export type DirectPushStatus = typeof DirectPushStatus.Type;
-
-class EnvironmentMobilePushHttpApi extends HttpApiGroup.make("mobilePush")
-  .add(
-    HttpApiEndpoint.post("register", "/api/mobile-push/register", {
-      headers: OptionalBearerHeaders,
-      payload: DirectPushRegistration,
-      success: DirectPushStatus,
-      error: [EnvironmentInternalError, EnvironmentScopeRequiredError],
-    }).middleware(EnvironmentAuthenticatedAuth),
-  )
-  .add(
-    HttpApiEndpoint.post("unregister", "/api/mobile-push/unregister", {
-      headers: OptionalBearerHeaders,
-      payload: Schema.Struct({ deviceId: TrimmedNonEmptyString }),
-      success: Schema.Struct({ ok: Schema.Boolean }),
-      error: [EnvironmentInternalError, EnvironmentScopeRequiredError],
-    }).middleware(EnvironmentAuthenticatedAuth),
-  ) {}
-
 export class EnvironmentHttpApi extends HttpApi.make("environment")
   .add(EnvironmentMetadataHttpApi)
   .add(EnvironmentAuthHttpApi)
   .add(EnvironmentOrchestrationHttpApi)
   .add(EnvironmentPullRequestsHttpApi)
-  .add(EnvironmentConnectHttpApi)
-  .add(EnvironmentMobilePushHttpApi) {}
+  .add(EnvironmentProjectsHttpApi)
+  .add(EnvironmentConnectHttpApi) {}

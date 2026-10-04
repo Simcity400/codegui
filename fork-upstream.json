@@ -1,4 +1,5 @@
 {
-  "tag": "v0.0.45-nightly.20260930.2510",
-  "commit": "6b286ae8a20ef2e18fa70b09e92f66edd859128b"
+  "repository": "pingdotgg/t3code",
+  "branch": "main",
+  "commit": "d60a71ef6e371d8b345ecb1f7575117d675187c7"
 }

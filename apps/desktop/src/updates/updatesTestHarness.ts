@@ -212,10 +212,8 @@ export function makeHarness(options: UpdatesHarnessOptions = {}) {
   // disk I/O that would outrun the tests' settle loops.
   const updateRestartMarkers = new Set<string>();
   const fileSystemLayer = FileSystem.layerNoop({
-    // The Windows fork checks join the marker path with backslashes.
     readFileString: (path) =>
-      path.replaceAll("\\", "/") === "/missing/resources/package-type" &&
-      options.packageType !== undefined
+      path === "/missing/resources/package-type" && options.packageType !== undefined
         ? Effect.succeed(options.packageType)
         : Effect.fail(
             PlatformError.systemError({

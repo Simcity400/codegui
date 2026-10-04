@@ -38,7 +38,7 @@ import {
 import type { AgentActivityProps } from "../../widgets/AgentActivity";
 import { getAgentLiveActivities, startAgentLiveActivity } from "./agentLiveActivity";
 import { resolveCloudPublicConfig } from "../cloud/publicConfig";
-import { supportsAgentAwarenessPush, usesDirectApplePush } from "./capabilities";
+import { supportsAgentAwarenessPush } from "./capabilities";
 import { makeRelayDeviceRegistrationRequest, resolveApsEnvironment } from "./registrationPayload";
 
 const REMOTE_ACTIVITY_REGISTRATION_RETRY_MS = 15_000;
@@ -83,6 +83,11 @@ const activityPushTokenListeners = new WeakSet<LiveActivity<AgentActivityProps>>
 // foreground after real time away still triggers a replay. Cleared on
 // sign-out/identity change alongside the device registration state.
 const ACTIVITY_TOKEN_REREGISTER_INTERVAL_MS = 60_000;
+// Locally started activities carry the same stale window the relay puts on
+// every push (STALE_AFTER_SECONDS in ApnsClient.ts), so a card whose relay
+// registration never lands still degrades instead of looking alive forever.
+const LIVE_ACTIVITY_STALE_AFTER_MS = 10 * 60_000;
+const liveActivityStaleDate = () => new Date(Date.now() + LIVE_ACTIVITY_STALE_AFTER_MS);
 const registeredActivityPushTokens = new Map<string, number>();
 let androidDeviceReplayedAt: number | null = null;
 let pushTokenSubscription: { remove: () => void } | null = null;
@@ -174,7 +179,6 @@ export function setAgentAwarenessRelayTokenProvider(
   provider: (() => Promise<string | null>) | null,
   identity?: string,
 ): void {
-  if (usesDirectApplePush()) return;
   const isExistingIdentity =
     provider !== null &&
     !shouldRegisterAgentAwarenessDeviceForProvider(relayTokenProviderIdentity, identity);
@@ -500,7 +504,6 @@ export function armAgentAwarenessLiveActivityForLocalWork(input: {
   readonly threadTitle: string;
   readonly projectTitle: string;
 }): void {
-  if (usesDirectApplePush()) return;
   if (!canRegisterRemoteLiveActivities() || !relayTokenProvider) {
     return;
   }
@@ -529,25 +532,28 @@ function armAgentAwarenessLiveActivityForLocalWorkNow(input: {
       return;
     }
     const nowIso = new Date(Date.now()).toISOString();
-    const activity = startAgentLiveActivity({
-      title: "T3 Code",
-      subtitle: "Agent work in progress",
-      activeCount: 1,
-      updatedAt: nowIso,
-      activities: [
-        {
-          environmentId: "",
-          threadId: "",
-          projectTitle: input.projectTitle,
-          threadTitle: input.threadTitle,
-          modelTitle: "",
-          phase: "starting",
-          status: "Connecting",
-          updatedAt: nowIso,
-          deepLink: "/",
-        },
-      ],
-    });
+    const activity = startAgentLiveActivity(
+      {
+        title: "T3 Code",
+        subtitle: "Agent work in progress",
+        activeCount: 1,
+        updatedAt: nowIso,
+        activities: [
+          {
+            environmentId: "",
+            threadId: "",
+            projectTitle: input.projectTitle,
+            threadTitle: input.threadTitle,
+            modelTitle: "",
+            phase: "starting",
+            status: "Connecting",
+            updatedAt: nowIso,
+            deepLink: "/",
+          },
+        ],
+      },
+      liveActivityStaleDate(),
+    );
     if (!activity) {
       return;
     }
@@ -1133,13 +1139,16 @@ export function refreshActiveLiveActivityRemoteRegistration(): Effect.Effect<
           const aggregate = snapshot.aggregate;
           const primed = yield* Effect.try({
             try: () =>
-              startAgentLiveActivity({
-                title: aggregate.title,
-                subtitle: aggregate.subtitle,
-                activeCount: aggregate.activeCount,
-                updatedAt: aggregate.updatedAt,
-                activities: aggregate.activities,
-              }),
+              startAgentLiveActivity(
+                {
+                  title: aggregate.title,
+                  subtitle: aggregate.subtitle,
+                  activeCount: aggregate.activeCount,
+                  updatedAt: aggregate.updatedAt,
+                  activities: aggregate.activities,
+                },
+                liveActivityStaleDate(),
+              ),
             catch: (cause) =>
               new AgentAwarenessOperationError({
                 operation: "prime-live-activity",

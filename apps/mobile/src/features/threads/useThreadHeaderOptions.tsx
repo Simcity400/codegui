@@ -1,6 +1,5 @@
 import { StackActions, useNavigation } from "@react-navigation/native";
-import { HeaderBackContext } from "@react-navigation/elements";
-import { useContext, useMemo } from "react";
+import { useMemo } from "react";
 import type { AppNativeStackNavigationOptions } from "../../native/StackHeader";
 import { useAdaptiveWorkspaceLayout } from "../layout/AdaptiveWorkspaceLayout";
 import { withNativeGlassHeaderItem } from "../layout/native-glass-header-items";
@@ -19,26 +18,11 @@ export function useThreadHeaderOptions(props: {
   readonly usesNativeHeaderGlass: boolean;
   readonly gitControls: Parameters<typeof ThreadGitControls>[0];
   readonly onReturnToThread?: () => void;
-  readonly onOpenAgents: () => void;
 }) {
   const navigation = useNavigation();
   const { layout, panes, togglePrimarySidebar } = useAdaptiveWorkspaceLayout();
   const threadCenterHeaderItems = useThreadGitCenterHeaderItems(props.gitControls);
   const compactRightHeaderItems = useThreadGitRightHeaderItems(props.gitControls);
-  const agentsHeaderItem = useMemo(
-    () =>
-      withNativeGlassHeaderItem({
-        accessibilityLabel: "Open agents",
-        // An SF Symbol, like its neighbours: image sources load asynchronously,
-        // so the bar briefly showed the label and then an oversized glyph.
-        icon: { name: "cpu", type: "sfSymbol" as const },
-        identifier: "thread-right-agents",
-        label: "Agents",
-        onPress: props.onOpenAgents,
-        type: "button" as const,
-      }),
-    [props.onOpenAgents],
-  );
   const splitLeftHeaderItems = useMemo<NativeHeaderItems>(
     () => [
       {
@@ -83,11 +67,7 @@ export function useThreadHeaderOptions(props: {
   // Deep links / cold starts land with Thread as the ONLY route, where the
   // native back button does not render. Provide an explicit Home escape for
   // that case; when history exists the native back button is used instead.
-  // canGoBack() describes the focused route. While Agents or a sheet is
-  // open, it can be true even when this thread is the first stack entry.
-  // Use this screen's native predecessor so background updates cannot remove
-  // its Home control and leave no way out when the covering screen closes.
-  const canGoBack = useContext(HeaderBackContext) !== undefined;
+  const canGoBack = navigation.canGoBack();
   const compactHomeHeaderItems = useMemo<NativeHeaderItems>(
     () => [
       withNativeGlassHeaderItem({
@@ -123,10 +103,8 @@ export function useThreadHeaderOptions(props: {
     // Search lives in the persistent sidebar, so the split header keeps
     // the git controls on the RIGHT (no center items — center space is
     // reserved for future breadcrumbs/status).
-    unstable_headerRightItems: () => [
-      ...(layout.usesSplitView ? threadCenterHeaderItems : compactRightHeaderItems),
-      agentsHeaderItem,
-    ],
+    unstable_headerRightItems: () =>
+      layout.usesSplitView ? threadCenterHeaderItems : compactRightHeaderItems,
     unstable_headerSubtitle: props.usesNativeHeaderGlass ? props.subtitle : undefined,
     contentStyle: undefined,
   };

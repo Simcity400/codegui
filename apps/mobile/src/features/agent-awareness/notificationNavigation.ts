@@ -1,16 +1,35 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useLayoutEffect, useRef } from "react";
 import * as Notifications from "expo-notifications";
 import { useLinkTo } from "@react-navigation/native";
 
-import {
-  routeAgentNotificationResponseOnce,
-  shouldPresentForegroundAgentNotification,
-} from "./notificationPayload";
+import { setAndroidThreadOnScreen } from "./androidNotifications";
+import { foregroundNotificationBehavior } from "./foregroundNotificationBehavior";
+import { routeAgentNotificationResponseOnce, threadDeepLinkOnScreen } from "./notificationPayload";
 import { consumeLastAgentNotificationResponse } from "./notificationResponseConsumer";
 
-export function useAgentNotificationNavigation(): void {
+export function useAgentNotificationNavigation(pathname: string): void {
   const linkTo = useLinkTo();
   const handledResponseIds = useRef(new Set<string>());
+  // Read through a ref so the native handler registered once below sees the
+  // current route without re-registering on every navigation.
+  const deepLinkOnScreen = useRef<string | null>(null);
+  useLayoutEffect(() => {
+    const thread = threadDeepLinkOnScreen(pathname);
+    deepLinkOnScreen.current = thread;
+    // Android alerts are built natively from FCM data, so update the native
+    // route at commit time alongside the iOS handler's route reference.
+    setAndroidThreadOnScreen(thread);
+  }, [pathname]);
+
+  useEffect(() => {
+    Notifications.setNotificationHandler({
+      handleNotification: (notification) =>
+        Promise.resolve(foregroundNotificationBehavior(notification, deepLinkOnScreen.current)),
+    });
+    return () => {
+      Notifications.setNotificationHandler(null);
+    };
+  }, []);
 
   useEffect(() => {
     const handleResponse = (response: Notifications.NotificationResponse): void => {
@@ -32,33 +51,4 @@ export function useAgentNotificationNavigation(): void {
       subscription.remove();
     };
   }, [linkTo]);
-}
-
-let visiblePathname: string | null = null;
-
-/** Presents agent alerts while the app is open, except for the thread on screen. */
-export function useForegroundAgentNotifications(pathname: string): void {
-  useEffect(() => {
-    visiblePathname = pathname;
-  }, [pathname]);
-
-  useEffect(() => {
-    Notifications.setNotificationHandler({
-      handleNotification: async (notification) => {
-        const present = shouldPresentForegroundAgentNotification({
-          notification,
-          visiblePathname,
-        });
-        return {
-          shouldShowBanner: present,
-          shouldShowList: present,
-          shouldPlaySound: present,
-          shouldSetBadge: false,
-        };
-      },
-    });
-    return () => {
-      Notifications.setNotificationHandler(null);
-    };
-  }, []);
 }
