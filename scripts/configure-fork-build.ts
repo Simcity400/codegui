@@ -66,5 +66,15 @@ if (import.meta.main) {
       NodePath.join(root, "apps/desktop/src/updates/windowsUpdateSelection.ts"),
     );
     NodeFS.writeFileSync(path, source);
-  } else throw new Error("Expected mobile or desktop.");
+  } else if (process.argv[2] === "checks") {
+    const path = NodePath.join(root, "scripts/build-desktop-artifact.test.ts");
+    // Git for Windows tar treats drive-letter paths as remote hosts. Retain the
+    // pipeline's portable fixture setup without changing upstream-owned tests.
+    const source = replaceOnce(
+      NodeFS.readFileSync(path, "utf8"),
+      'ChildProcess.make("tar", ["-czf", archivePath, "-C", contentRoot, "."], {',
+      'ChildProcess.make("tar", ["-czf", path.basename(archivePath), "-C", "content", "."], {\n      cwd: input.root,',
+    );
+    NodeFS.writeFileSync(path, source);
+  } else throw new Error("Expected mobile, desktop or checks.");
 }

@@ -1,6 +1,8 @@
 interface UpdateInfo {
   readonly version: string;
   readonly releaseDate: string;
+  readonly path: string;
+  readonly sha512: string;
   readonly files: Array<{ url: string; sha512: string; size?: number }>;
 }
 interface WindowsUpdater {
