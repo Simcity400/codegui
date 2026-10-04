@@ -84,7 +84,10 @@ jobs:
       - name: Check mobile features
         run: |
           vp run --filter @t3tools/mobile typecheck
-          vp test run scripts/mobile-build-budget.test.ts packages/client-runtime/src/state/subagentRuntime.test.ts
+          vp test run scripts/mobile-build-budget.test.ts scripts/configure-fork-build.test.ts
+
+      - name: Configure the personal iPhone build and update destination
+        run: node scripts/configure-fork-build.ts mobile
 
       - name: Expose pnpm
         run: |

@@ -41,5 +41,5 @@ regexes = ['''^8ae96ff3-3425-4f4c-8772-b6fd61502868$''']
 description = "Default keyboard shortcuts, not API credentials"
 targetRules = ["generic-api-key"]
 condition = "AND"
-paths = ['''(^|/)packages/shared/src/keybindings\.ts$''']
+paths = ['''(^|/)packages/shared/src/keybindings\.ts$''', '''(^|/)apps/web/src/components/settings/KeybindingsSettings\.logic\.test\.ts$''']
 regexes = ['''^mod\+shift\+(enter|arrowup|arrowdown)$''']

@@ -4,8 +4,8 @@ name: Fork Release
 # publishes them as one GitHub prerelease on this repository. Packaged apps
 # point their electron-updater feed here (GITHUB_REPOSITORY at build time), so
 # the in-app update button picks these releases up; the merged update manifest
-# lists both installers; the desktop adapter selects the native host CPU
-# architecture before electron-updater caches or downloads the update. Kept separate from upstream's release.yml to avoid merge
+# lists both installers; the build configures native Windows CPU
+# selection before electron-updater caches or downloads the update. Kept separate from upstream's release.yml to avoid merge
 # conflicts; that workflow needs T3's own secrets and runners and cannot run
 # on this fork.
 
@@ -135,6 +135,9 @@ jobs:
         uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
         with:
           targets: ${{ matrix.rust_target }}
+
+      - name: Configure installer architecture selection
+        run: node scripts/configure-fork-build.ts desktop
 
       - name: Align package versions to release version
         run: node scripts/update-release-package-versions.ts "${{ needs.prepare.outputs.version }}"

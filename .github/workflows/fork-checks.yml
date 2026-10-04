@@ -41,7 +41,7 @@ jobs:
         run: '"$RUNNER_TEMP/gitleaks" dir . --config .gitleaks.toml --redact --no-banner'
 
   regressions:
-    name: Fork regression tests
+    name: Build and sync regression tests
     runs-on: windows-2025
     timeout-minutes: 20
     steps:
@@ -62,47 +62,16 @@ jobs:
               - --filter=@t3tools/desktop...
               - --filter=t3...
               - --filter=@t3tools/scripts...
-              - --filter=@t3tools/web...
-              - --filter=@t3tools/mobile...
-      - name: Test release and update behavior
+      - name: Test release and sync behavior
         shell: bash
         run: |
           vp test run \
             scripts/fork-sync.test.ts \
+            scripts/configure-fork-build.test.ts \
+            scripts/fork-windows-update-selection.test.ts \
             scripts/pin-release-tag.test.ts \
             scripts/mobile-build-budget.test.ts \
-            scripts/merge-update-manifests.test.ts \
-            apps/desktop/src/updates/DesktopUpdates.test.ts \
-            apps/desktop/src/updates/windowsUpdateSelection.test.ts \
-            apps/desktop/src/electron/ElectronUpdater.windows.test.ts \
-            apps/server/src/mcp/PreviewAutomationBroker.test.ts \
-            apps/server/src/mcp/toolkits/preview/handlers.test.ts \
-            apps/server/src/provider/Layers/CodexSessionRuntime.test.ts \
-            apps/server/src/persistence/ForkCompatibility.test.ts \
-            apps/server/src/persistence/Layers/OrchestrationEventStore.test.ts \
-            apps/server/src/persistence/Layers/ProjectionThreadMessages.test.ts \
-            packages/client-runtime/src/state/subagentRuntime.test.ts \
-            packages/client-runtime/src/state/agentTranscripts.test.ts \
-            packages/client-runtime/src/state/subagentPresentation.test.ts \
-            apps/mobile/src/features/agents/agentListRows.test.ts \
-            apps/mobile/src/features/agent-awareness/directRegistration.test.ts \
-            apps/mobile/src/features/agent-awareness/notificationNavigation.test.ts \
-            apps/server/src/notifications/DirectPush.test.ts \
-            apps/server/src/notifications/directPushState.test.ts \
-            apps/server/src/provider/Layers/CodexAdapter.test.ts \
-            apps/server/src/provider/Layers/ClaudeAdapter.test.ts \
-            apps/server/src/orchestration/Layers/ProviderRuntimeIngestion.test.ts \
-            apps/server/src/orchestration/Layers/ProjectionPipeline.test.ts \
-            apps/server/src/orchestration/Layers/ProjectionSnapshotQuery.test.ts \
-            apps/mobile/src/lib/threadActivity.fork.test.ts \
-            apps/server/src/orchestration/Layers/ProviderRuntimeIngestion.activity.fork.test.ts \
-            apps/server/src/persistence/Layers/OrchestrationEventStore.fork.test.ts \
-            apps/server/src/provider/Layers/ClaudeSubagentTranscript.test.ts \
-            packages/client-runtime/src/state/subagentRuntime.fork.test.ts \
-            apps/desktop/src/updates/upstreamMerge.test.ts
+            scripts/merge-update-manifests.test.ts
           vp test run scripts/build-desktop-artifact.test.ts -t "Windows|sidecar|ASAR"
-      - name: Test web feature controls
-        working-directory: apps/web
-        run: vp test run --project unit src/components/chat/AgentTranscript.test.ts src/components/sidebar/upstreamMerge.logic.test.ts
-      - name: Typecheck retained feature packages
-        run: vp run --filter @t3tools/contracts --filter @t3tools/client-runtime --filter @t3tools/web --filter @t3tools/mobile --filter t3 --filter @t3tools/desktop --filter @t3tools/scripts --concurrency-limit 2 typecheck
+      - name: Typecheck the pipeline
+        run: vp run --filter @t3tools/scripts typecheck
