@@ -171,6 +171,7 @@ export class EnvironmentScopeRequiredError extends Schema.TaggedError<Environmen
   {
     code: Schema.Literal("insufficient_scope"),
     requiredScope: AuthEnvironmentScope,
+    requiredPermission: Schema.optionalKey(Schema.String),
     traceId: TrimmedNonEmptyString,
   },
   { httpApiStatus: 403 },
@@ -180,7 +181,7 @@ export class EnvironmentScopeRequiredError extends Schema.TaggedError<Environmen
   }
 
   override get message(): string {
-    return `This request needs the ${this.requiredScope} scope, which this client does not have.`;
+    return `This request needs the ${this.requiredPermission ?? this.requiredScope} scope, which this client does not have.`;
   }
 }
 
@@ -764,22 +765,18 @@ export const DirectPushStatus = Schema.Struct({
 });
 export type DirectPushStatus = typeof DirectPushStatus.Type;
 class EnvironmentMobilePushHttpApi extends HttpApiGroup.make("mobilePush")
-  .add(
-    HttpApiEndpoint.post("register", "/api/mobile-push/register", {
-      headers: OptionalBearerHeaders,
-      payload: DirectPushRegistration,
-      success: DirectPushStatus,
-      error: [EnvironmentInternalError, EnvironmentScopeRequiredError],
-    }).middleware(EnvironmentAuthenticatedAuth),
-  )
-  .add(
-    HttpApiEndpoint.post("unregister", "/api/mobile-push/unregister", {
-      headers: OptionalBearerHeaders,
-      payload: Schema.Struct({ deviceId: TrimmedNonEmptyString }),
-      success: Schema.Struct({ ok: Schema.Boolean }),
-      error: [EnvironmentInternalError, EnvironmentScopeRequiredError],
-    }).middleware(EnvironmentAuthenticatedAuth),
-  ) {}
+  .add(HttpApiEndpoint.post("register", "/api/mobile-push/register", {
+    headers: OptionalBearerHeaders,
+    payload: DirectPushRegistration,
+    success: DirectPushStatus,
+    error: [EnvironmentInternalError, EnvironmentScopeRequiredError],
+  }).middleware(EnvironmentAuthenticatedAuth))
+  .add(HttpApiEndpoint.post("unregister", "/api/mobile-push/unregister", {
+    headers: OptionalBearerHeaders,
+    payload: Schema.Struct({ deviceId: TrimmedNonEmptyString }),
+    success: Schema.Struct({ ok: Schema.Boolean }),
+    error: [EnvironmentInternalError, EnvironmentScopeRequiredError],
+  }).middleware(EnvironmentAuthenticatedAuth)) {}
 
 export class EnvironmentHttpApi extends HttpApi.make("environment")
   .add(EnvironmentMetadataHttpApi)

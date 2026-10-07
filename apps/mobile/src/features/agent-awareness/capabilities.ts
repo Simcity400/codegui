@@ -9,8 +9,6 @@ export function supportsAgentAwarenessPush() {
 }
 
 export function usesDirectApplePush() {
-  return (
-    Platform.OS === "ios" &&
-    Constants.expoConfig?.ios?.bundleIdentifier?.startsWith("com.simcity400.") === true
-  );
+  return Platform.OS === "ios" &&
+    Constants.expoConfig?.ios?.bundleIdentifier?.startsWith("com.simcity400.") === true;
 }
