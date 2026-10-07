@@ -1,6 +1,7 @@
 // @effect-diagnostics nodeBuiltinImport:off - Personal build configuration applied only inside CI checkouts.
 import * as NodeFS from "node:fs";
 import * as NodePath from "node:path";
+import { configureForkPush } from "./configure-fork-push.ts";
 
 function replaceOnce(source: string, before: string, after: string): string {
   if (source.split(before).length !== 2)
@@ -56,9 +57,11 @@ export function configureDesktop(source: string): string {
 if (import.meta.main) {
   const root = NodePath.resolve(import.meta.dirname, "..");
   if (process.argv[2] === "mobile") {
+    configureForkPush(root, "mobile");
     const path = NodePath.join(root, "apps/mobile/app.config.ts");
     NodeFS.writeFileSync(path, configureMobile(NodeFS.readFileSync(path, "utf8")));
   } else if (process.argv[2] === "desktop") {
+    configureForkPush(root, "server");
     const path = NodePath.join(root, "apps/desktop/src/electron/ElectronUpdater.ts");
     const source = configureDesktop(NodeFS.readFileSync(path, "utf8"));
     NodeFS.copyFileSync(
@@ -67,6 +70,7 @@ if (import.meta.main) {
     );
     NodeFS.writeFileSync(path, source);
   } else if (process.argv[2] === "checks") {
+    configureForkPush(root, "server");
     const path = NodePath.join(root, "scripts/build-desktop-artifact.test.ts");
     // Git for Windows tar treats drive-letter paths as remote hosts. Retain the
     // pipeline's portable fixture setup without changing upstream-owned tests.

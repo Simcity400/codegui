@@ -68,11 +68,15 @@ jobs:
           vp test run \
             scripts/fork-sync.test.ts \
             scripts/configure-fork-build.test.ts \
+            scripts/configure-fork-push.test.ts \
             scripts/fork-windows-update-selection.test.ts \
             scripts/pin-release-tag.test.ts \
             scripts/mobile-build-budget.test.ts \
             scripts/merge-update-manifests.test.ts
           node scripts/configure-fork-build.ts checks
+          vp test run apps/server/src/notifications/DirectPush.test.ts apps/server/src/notifications/directPushState.test.ts
           vp test run scripts/build-desktop-artifact.test.ts -t "Windows|sidecar|ASAR"
+      - name: Typecheck server delivery
+        run: vp run --filter t3 typecheck
       - name: Typecheck the pipeline
         run: vp run --filter @t3tools/scripts typecheck

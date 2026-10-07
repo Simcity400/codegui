@@ -83,11 +83,15 @@ jobs:
 
       - name: Check mobile features
         run: |
-          vp run --filter @t3tools/mobile typecheck
-          vp test run scripts/mobile-build-budget.test.ts scripts/configure-fork-build.test.ts
+          vp test run scripts/mobile-build-budget.test.ts scripts/configure-fork-build.test.ts scripts/configure-fork-push.test.ts
 
       - name: Configure the personal iPhone build and update destination
         run: node scripts/configure-fork-build.ts mobile
+
+      - name: Check personal iPhone delivery
+        run: |
+          vp run --filter @t3tools/mobile typecheck
+          vp test run apps/mobile/src/features/agent-awareness/directRegistration.test.ts
 
       - name: Expose pnpm
         run: |

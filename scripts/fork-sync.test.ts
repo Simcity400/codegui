@@ -47,6 +47,38 @@ describe("official main sync", () => {
     git(upstream, "config", "user.email", "test@example.invalid");
     write(upstream, "feature.txt", "base\n");
     write(upstream, ".github/workflows/official.yml", "name: Official\n");
+    // Small upstream surfaces let the real sync exercise reapplying hooks as
+    // well as preserving their implementation files.
+    write(
+      upstream,
+      "packages/contracts/src/environmentHttp.ts",
+      "  RelayCloudEnvironmentHealthRequest,\nexport class EnvironmentHttpApi extends HttpApi.make('environment')\n  .add(EnvironmentWebhooksHttpApi) {}\n",
+    );
+    write(
+      upstream,
+      "apps/server/src/server.ts",
+      'import * as AgentAwarenessRelay from "./relay/AgentAwarenessRelay.ts";\n  AgentAwarenessRelay.layer,\nLayer.provide(AuthHttp.layer),\n',
+    );
+    write(
+      upstream,
+      "apps/mobile/src/App.tsx",
+      'import { SubscriptionUsageCoordinator } from "./widgets/SubscriptionUsageCoordinator";\n<SubscriptionUsageCoordinator />\n',
+    );
+    write(
+      upstream,
+      "apps/mobile/src/features/agent-awareness/capabilities.ts",
+      'import Constants from "expo-constants";\nimport { Platform } from "react-native";\n',
+    );
+    write(
+      upstream,
+      "apps/mobile/src/features/agent-awareness/remoteRegistration.ts",
+      'import { supportsAgentAwarenessPush } from "./capabilities";\nfunction canRegisterRemoteLiveActivities(): boolean {\n  return Platform.OS === "ios";\n}\nfunction canRegisterPushNotifications(): boolean {\n  return Platform.OS === "ios" || Platform.OS === "android";\n}\nexport function setAgentAwarenessRelayTokenProvider() {\n  const isExistingIdentity = false;\n}\n',
+    );
+    write(
+      upstream,
+      "apps/mobile/src/features/settings/SettingsNotificationsRouteScreen.tsx",
+      'import { supportsAgentAwarenessPush } from "../agent-awareness/capabilities";\nexport function SettingsNotificationsRouteScreen() {\n}\n',
+    );
     commit(upstream);
     git(directory, "clone", "-c", "core.autocrlf=false", upstream, fork);
     git(fork, "config", "user.name", "Test");
@@ -79,6 +111,15 @@ describe("official main sync", () => {
     expect(NodeFS.readFileSync(NodePath.join(fork, "new.txt"), "utf8")).toBe(
       "new upstream feature\n",
     );
+    expect(NodeFS.readFileSync(NodePath.join(fork, "apps/server/src/server.ts"), "utf8")).toContain(
+      "DirectPush.layer",
+    );
+    expect(NodeFS.readFileSync(NodePath.join(fork, "apps/mobile/src/App.tsx"), "utf8")).toContain(
+      "<DirectPushCoordinator />",
+    );
+    expect(
+      NodeFS.readFileSync(NodePath.join(fork, "packages/contracts/src/environmentHttp.ts"), "utf8"),
+    ).toContain(".add(EnvironmentMobilePushHttpApi)");
     for (const path of PIPELINE_PATHS)
       expect(NodeFS.readFileSync(NodePath.join(fork, path), "utf8")).toBe(pipelineContent(path));
     expect(git(fork, "diff", "--name-only", original, "HEAD", "--", ".github/workflows")).toBe("");
@@ -131,6 +172,16 @@ describe("official main sync", () => {
     write(upstream, "feature.txt", "advanced\n");
     commit(upstream);
     expect(() => syncMain(fork, upstream, checked)).toThrow("moved");
+    expect(git(fork, "rev-parse", "HEAD")).toBe(original);
+    expect(git(fork, "status", "--porcelain")).toBe("");
+  });
+  it("rolls back instead of deleting push delivery when an upstream integration point changes", () => {
+    const original = git(fork, "rev-parse", "HEAD");
+    write(upstream, "apps/server/src/server.ts", "changed upstream bootstrap\n");
+    commit(upstream);
+    expect(() => syncMain(fork, upstream, git(upstream, "rev-parse", "HEAD"))).toThrow(
+      "Personal push integration changed upstream",
+    );
     expect(git(fork, "rev-parse", "HEAD")).toBe(original);
     expect(git(fork, "status", "--porcelain")).toBe("");
   });

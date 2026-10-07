@@ -63,6 +63,7 @@ import {
   PullRequestUnavailableError,
 } from "./pullRequest.ts";
 import {
+  RelayAgentActivityAggregateState,
   RelayCloudEnvironmentHealthRequest,
   RelayCloudMintCredentialRequest,
   RelayEnvironmentConfigRequest,
@@ -746,6 +747,40 @@ class EnvironmentWebhooksHttpApi extends HttpApiGroup.make("webhooks")
   .add(HttpApiEndpoint.patch("webhookPatch", WEBHOOK_PATH, webhookEndpoint))
   .add(HttpApiEndpoint.get("webhookGet", WEBHOOK_PATH, webhookEndpoint)) {}
 
+export const DirectPushRegistration = Schema.Struct({
+  deviceId: TrimmedNonEmptyString,
+  bundleId: TrimmedNonEmptyString,
+  apsEnvironment: Schema.Literals(["sandbox", "production"]),
+  pushToken: Schema.NullOr(Schema.String.check(Schema.isPattern(/^[a-fA-F0-9]{32,512}$/))),
+  activityPushToken: Schema.NullOr(Schema.String.check(Schema.isPattern(/^[a-fA-F0-9]{32,512}$/))),
+  notificationsEnabled: Schema.Boolean,
+  liveActivitiesEnabled: Schema.Boolean,
+});
+export type DirectPushRegistration = typeof DirectPushRegistration.Type;
+export const DirectPushStatus = Schema.Struct({
+  configured: Schema.Boolean,
+  aggregate: Schema.NullOr(RelayAgentActivityAggregateState),
+  deliveryError: Schema.NullOr(Schema.String),
+});
+export type DirectPushStatus = typeof DirectPushStatus.Type;
+class EnvironmentMobilePushHttpApi extends HttpApiGroup.make("mobilePush")
+  .add(
+    HttpApiEndpoint.post("register", "/api/mobile-push/register", {
+      headers: OptionalBearerHeaders,
+      payload: DirectPushRegistration,
+      success: DirectPushStatus,
+      error: [EnvironmentInternalError, EnvironmentScopeRequiredError],
+    }).middleware(EnvironmentAuthenticatedAuth),
+  )
+  .add(
+    HttpApiEndpoint.post("unregister", "/api/mobile-push/unregister", {
+      headers: OptionalBearerHeaders,
+      payload: Schema.Struct({ deviceId: TrimmedNonEmptyString }),
+      success: Schema.Struct({ ok: Schema.Boolean }),
+      error: [EnvironmentInternalError, EnvironmentScopeRequiredError],
+    }).middleware(EnvironmentAuthenticatedAuth),
+  ) {}
+
 export class EnvironmentHttpApi extends HttpApi.make("environment")
   .add(EnvironmentMetadataHttpApi)
   .add(EnvironmentAuthHttpApi)
@@ -754,4 +789,5 @@ export class EnvironmentHttpApi extends HttpApi.make("environment")
   .add(EnvironmentPullRequestsHttpApi)
   .add(EnvironmentProjectsHttpApi)
   .add(EnvironmentConnectHttpApi)
-  .add(EnvironmentWebhooksHttpApi) {}
+  .add(EnvironmentWebhooksHttpApi)
+  .add(EnvironmentMobilePushHttpApi) {}

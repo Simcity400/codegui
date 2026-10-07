@@ -7,3 +7,10 @@ export function supportsAgentAwarenessPush() {
     ? supportsAndroidAgentNotifications()
     : Platform.OS === "ios" && Constants.expoConfig?.extra?.iosPersonalTeamBuild !== true;
 }
+
+export function usesDirectApplePush() {
+  return (
+    Platform.OS === "ios" &&
+    Constants.expoConfig?.ios?.bundleIdentifier?.startsWith("com.simcity400.") === true
+  );
+}

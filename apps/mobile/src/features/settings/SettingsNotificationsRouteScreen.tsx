@@ -17,7 +17,8 @@ import {
   settlePromise,
   squashAtomCommandFailure,
 } from "@t3tools/client-runtime/state/runtime";
-import { supportsAgentAwarenessPush } from "../agent-awareness/capabilities";
+import { supportsAgentAwarenessPush, usesDirectApplePush } from "../agent-awareness/capabilities";
+import { DirectPushSettings } from "./DirectPushSettings";
 import {
   openAndroidLiveUpdateSettings,
   supportsAndroidLiveUpdateSettings,
@@ -57,6 +58,7 @@ function useDeviceRegistered(): boolean {
 }
 
 export function SettingsNotificationsRouteScreen() {
+  if (usesDirectApplePush()) return <DirectPushSettings />;
   if (!hasCloudPublicConfig()) {
     return (
       <SettingsScreen title="Notifications">

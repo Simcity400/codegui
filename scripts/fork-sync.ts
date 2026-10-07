@@ -2,6 +2,7 @@
 import * as NodeChildProcess from "node:child_process";
 import * as NodeFS from "node:fs";
 import * as NodePath from "node:path";
+import { configureForkPush, DIRECT_PUSH_PATHS, PUSH_HOOK_PATHS } from "./configure-fork-push.ts";
 
 interface Release {
   tag_name: string;
@@ -13,6 +14,7 @@ interface Release {
 }
 const nightlyTag = /^v\d+\.\d+\.\d+-nightly\.\d{8}\.\d+$/;
 export const PIPELINE_PATHS = [
+  ...DIRECT_PUSH_PATHS,
   ".gitmodules",
   ".github/workflows/fork-sync.yml",
   ".github/workflows/fork-release.yml",
@@ -85,7 +87,7 @@ export function hasReleaseChanges(
     .some((path) => path !== "" && !path.endsWith(".md"));
 }
 
-/** Replace application code with official main, retaining only the build and publish pipeline. */
+/** Replace application code with official main, retaining the pipeline and reapplying personal push integration. */
 export function syncMain(cwd: string, upstream: string, expected: string): string {
   if (!/^[a-f0-9]{40}$/.test(expected)) throw new Error("Invalid official main commit.");
   if (git(cwd, "status", "--porcelain"))
@@ -104,6 +106,9 @@ export function syncMain(cwd: string, upstream: string, expected: string): strin
     if (workflows.length) git(cwd, "rm", "-f", "--", ...workflows);
     if (available.length)
       git(cwd, "restore", "--source=" + original, "--staged", "--worktree", "--", ...available);
+    configureForkPush(cwd, "server");
+    configureForkPush(cwd, "mobile");
+    git(cwd, "add", "--", ...PUSH_HOOK_PATHS);
     // The Actions token cannot push new workflow definitions; those are maintained separately.
     if (git(cwd, "diff", "--cached", "--name-only", original, "--", ".github/workflows"))
       throw new Error("The sync would change fork workflows.");
