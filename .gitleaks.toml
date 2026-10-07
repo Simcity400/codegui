@@ -41,5 +41,26 @@ regexes = ['''^8ae96ff3-3425-4f4c-8772-b6fd61502868$''']
 description = "Default keyboard shortcuts, not API credentials"
 targetRules = ["generic-api-key"]
 condition = "AND"
-paths = ['''(^|/)packages/shared/src/keybindings\.ts$''', '''(^|/)apps/web/src/components/settings/KeybindingsSettings\.logic\.test\.ts$''']
+paths = [
+  '''(^|/)packages/shared/src/keybindings\.ts$''',
+  '''(^|/)apps/web/src/components/settings/KeybindingsSettings\.logic\.test\.ts$''',
+]
 regexes = ['''^mod\+shift\+(enter|arrowup|arrowdown)$''']
+
+[[allowlists]]
+description = "HTML image safety fixture containing a dummy API key"
+targetRules = ["generic-api-key"]
+condition = "AND"
+paths = ['''(^|/)apps/server/src/htmlRender/HtmlRender\.test\.ts$''']
+regexes = ['''^API_KEY=abc123$''']
+
+[[allowlists]]
+description = "Managed endpoint test IDs using forward and reverse hexadecimal alphabets"
+targetRules = ["generic-api-key"]
+condition = "AND"
+paths = [
+  '''(^|/)infra/relay/src/hooks/HeldHooks\.test\.ts$''',
+  '''(^|/)infra/relay/src/hooks/HookForwarder\.test\.ts$''',
+  '''(^|/)infra/relay/src/http/Api\.test\.ts$''',
+]
+regexes = ['''^0123456789abcdef$''', '''^fedcba9876543210$''']
