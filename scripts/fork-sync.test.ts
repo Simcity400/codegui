@@ -15,6 +15,8 @@ import {
 } from "./fork-sync.ts";
 
 const TAG = "v0.0.39-nightly.20260905.1281";
+const pipelineContent = (path: string) =>
+  path === ".gitmodules" ? "# personal pipeline\n" : "personal pipeline\n";
 const git = (cwd: string, ...args: string[]) =>
   NodeChildProcess.execFileSync("git", args, {
     cwd,
@@ -50,7 +52,7 @@ describe("official main sync", () => {
     git(fork, "config", "user.name", "Test");
     git(fork, "config", "user.email", "test@example.invalid");
     git(fork, "rm", ".github/workflows/official.yml");
-    for (const path of PIPELINE_PATHS) write(fork, path, "personal pipeline\n");
+    for (const path of PIPELINE_PATHS) write(fork, path, pipelineContent(path));
     write(fork, "personal.txt", "discard my feature\n");
     write(fork, "feature.txt", "personal behavior\n");
     write(fork, "fork-upstream.json", '{"commit":"older"}\n');
@@ -78,7 +80,7 @@ describe("official main sync", () => {
       "new upstream feature\n",
     );
     for (const path of PIPELINE_PATHS)
-      expect(NodeFS.readFileSync(NodePath.join(fork, path), "utf8")).toBe("personal pipeline\n");
+      expect(NodeFS.readFileSync(NodePath.join(fork, path), "utf8")).toBe(pipelineContent(path));
     expect(git(fork, "diff", "--name-only", original, "HEAD", "--", ".github/workflows")).toBe("");
     expect(
       JSON.parse(NodeFS.readFileSync(NodePath.join(fork, "fork-upstream.json"), "utf8")),
@@ -88,6 +90,40 @@ describe("official main sync", () => {
     );
     expect(git(fork, "status", "--porcelain")).toBe("");
     expect(syncMain(fork, upstream, official)).toBe(synced);
+  });
+  it("keeps vendored submodule metadata usable by sparse checkout credential cleanup after syncing", () => {
+    const modules = NodeFS.readFileSync(new URL("../.gitmodules", import.meta.url), "utf8");
+    write(fork, ".gitmodules", modules);
+    commit(fork);
+    const gitlink = git(upstream, "rev-parse", "HEAD");
+    for (const name of ["distilled", "floci"])
+      git(
+        upstream,
+        "update-index",
+        "--add",
+        "--cacheinfo",
+        `160000,${gitlink},.repos/alchemy-effect/submodules/${name}`,
+      );
+    git(upstream, "commit", "-m", "vendored submodules without root metadata");
+    const official = git(upstream, "rev-parse", "HEAD");
+    const sparse = NodePath.join(directory, "sparse");
+    git(directory, "clone", "--no-checkout", upstream, sparse);
+    git(sparse, "sparse-checkout", "set", "--no-cone", "/*", "!/.repos/");
+    git(sparse, "checkout", "main");
+    expect(() =>
+      git(sparse, "submodule", "foreach", "--recursive", "git status --porcelain"),
+    ).toThrow("No url found for submodule path");
+
+    syncMain(fork, upstream, official);
+    expect(NodeFS.readFileSync(NodePath.join(fork, ".gitmodules"), "utf8")).toBe(modules);
+    git(sparse, "fetch", fork, "main");
+    git(sparse, "checkout", "--detach", "FETCH_HEAD");
+    expect(NodeFS.existsSync(NodePath.join(sparse, ".repos"))).toBe(false);
+    expect(git(sparse, "submodule", "foreach", "--recursive", "git status --porcelain")).toBe("");
+    expect(git(sparse, "submodule", "status")).toContain(
+      ".repos/alchemy-effect/submodules/distilled",
+    );
+    expect(git(sparse, "submodule", "status")).toContain(".repos/alchemy-effect/submodules/floci");
   });
   it("refuses an upstream commit that moved after checking, without changing the fork", () => {
     const checked = git(upstream, "rev-parse", "HEAD");

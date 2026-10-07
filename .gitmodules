@@ -1,0 +1,12 @@
+# Vendored gitlinks need root metadata for actions/checkout credential cleanup,
+# even when sparse checkout excludes .repos. They are reference-only dependencies.
+[submodule ".repos/alchemy-effect/submodules/distilled"]
+	path = .repos/alchemy-effect/submodules/distilled
+	url = https://github.com/alchemy-run/distilled.git
+	update = none
+	ignore = all
+[submodule ".repos/alchemy-effect/submodules/floci"]
+	path = .repos/alchemy-effect/submodules/floci
+	url = https://github.com/alchemy-run/floci.git
+	update = none
+	ignore = all

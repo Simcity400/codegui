@@ -13,6 +13,7 @@ interface Release {
 }
 const nightlyTag = /^v\d+\.\d+\.\d+-nightly\.\d{8}\.\d+$/;
 export const PIPELINE_PATHS = [
+  ".gitmodules",
   ".github/workflows/fork-sync.yml",
   ".github/workflows/fork-release.yml",
   ".github/workflows/fork-mobile-preview.yml",
