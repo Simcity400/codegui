@@ -23,6 +23,7 @@ import { appAtomRegistry } from "./state/atom-registry";
 import { OverlayPortalHost } from "./components/OverlayPortal";
 import { shouldHandleAppLink } from "./lib/appLinking";
 import { useMobileNavigationTheme } from "./lib/useMobileNavigationTheme";
+import { useUiRuntimeMemoryWarningGc } from "./lib/useUiRuntimeMemoryWarningGc";
 import { SubscriptionUsageCoordinator } from "./widgets/SubscriptionUsageCoordinator";
 import { DirectPushCoordinator } from "./features/agent-awareness/DirectPushCoordinator";
 import { VoiceInputProvider } from "./features/voice-input/VoiceInputProvider";
@@ -58,6 +59,8 @@ function SplashScreenCoordinator() {
 }
 
 export default function App() {
+  useUiRuntimeMemoryWarningGc();
+
   return (
     <RegistryContext.Provider value={appAtomRegistry}>
       <CloudAuthProvider>
