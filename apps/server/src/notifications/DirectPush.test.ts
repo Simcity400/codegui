@@ -1,4 +1,5 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
+import { writeFileStringAtomically } from "@t3tools/shared/atomicWrite";
 import { beforeEach, vi } from "vite-plus/test";
 import { expect, it } from "@effect/vitest";
 import {
@@ -34,7 +35,6 @@ import { ProjectService } from "../project/ProjectService.ts";
 import { AuthSessionRepository } from "../persistence/AuthSessions.ts";
 import { ServerSecretStore } from "../auth/ServerSecretStore.ts";
 import { DirectPush, layer } from "./DirectPush.ts";
-import { writeFileStringAtomically } from "../atomicWrite.ts";
 import {
   ApplePushConfiguration,
   type ApplePushMessage,
@@ -52,8 +52,8 @@ vi.mock("./applePush.ts", async (original) => ({
   ...(await original<object>()),
   createApplePushSender: createSender,
 }));
-vi.mock("../atomicWrite.ts", async (original) => {
-  const module = await original<typeof import("../atomicWrite.ts")>();
+vi.mock("@t3tools/shared/atomicWrite", async (original) => {
+  const module = await original<typeof import("@t3tools/shared/atomicWrite")>();
   return { ...module, writeFileStringAtomically: vi.fn(module.writeFileStringAtomically) };
 });
 beforeEach(() => {

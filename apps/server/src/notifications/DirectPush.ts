@@ -9,6 +9,7 @@ import {
 } from "@t3tools/contracts";
 import type { RelayAgentActivityAggregateState } from "@t3tools/contracts/relay";
 import { projectThreadAwarenessV2 } from "@t3tools/shared/agentAwareness";
+import { writeFileStringAtomically } from "@t3tools/shared/atomicWrite";
 import { makeDrainableWorker } from "@t3tools/shared/DrainableWorker";
 import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
 import * as Context from "effect/Context";
@@ -28,7 +29,6 @@ import { SessionStore } from "../auth/SessionStore.ts";
 import { ServerSecretStore } from "../auth/ServerSecretStore.ts";
 import { CLOUD_LINKED_USER_ID } from "../cloud/config.ts";
 import { AuthSessionRepository } from "../persistence/AuthSessions.ts";
-import { writeFileStringAtomically } from "../atomicWrite.ts";
 import { ServerConfig } from "../config.ts";
 import { ServerEnvironment } from "../environment/ServerEnvironment.ts";
 import { ThreadManagementService } from "../orchestration-v2/ThreadManagementService.ts";
