@@ -11,7 +11,7 @@ import type { RelayAgentActivityAggregateState } from "@t3tools/contracts/relay"
 import { projectThreadAwarenessV2 } from "@t3tools/shared/agentAwareness";
 import { writeFileStringAtomically } from "@t3tools/shared/atomicWrite";
 import { makeDrainableWorker } from "@t3tools/shared/DrainableWorker";
-import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
+import * as HostProcess from "@t3tools/shared/HostProcess";
 import * as Context from "effect/Context";
 import * as Clock from "effect/Clock";
 import * as Effect from "effect/Effect";
@@ -103,7 +103,7 @@ export const layer = Layer.effect(
         Effect.option,
       );
     // The file holds the APNs signing key, which can push to every install of the app.
-    if (Option.isSome(credentials) && (yield* HostProcessPlatform) !== "win32")
+    if (Option.isSome(credentials) && (yield* HostProcess.Platform) !== "win32")
       yield* fs.stat(credentialsPath).pipe(
         Effect.flatMap((info) =>
           (info.mode & 0o077) === 0

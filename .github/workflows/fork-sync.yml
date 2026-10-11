@@ -64,6 +64,26 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           node scripts/fork-sync.ts merge
+      # Fork integrations survive sync while their upstream dependencies change.
+      # Check the merged source before it becomes main or reaches either client.
+      - name: Install integration check dependencies
+        uses: voidzero-dev/setup-vp@250f29ce396baf5e8f24498e17c0dfdebabc26eb # v1
+        with:
+          node-version-file: package.json
+          cache: true
+          run-install: |
+            args:
+              - --filter=t3...
+              - --filter=@t3tools/mobile...
+              - --filter=@t3tools/scripts...
+      - name: Check personal integrations against official main
+        run: |
+          vp run --filter t3 typecheck
+          vp run --filter @t3tools/mobile typecheck
+          vp run --filter @t3tools/scripts typecheck
+          vp test run apps/server/src/notifications/DirectPush.test.ts apps/server/src/notifications/directPushState.test.ts apps/mobile/src/features/agent-awareness/directRegistration.test.ts scripts/configure-fork-build.test.ts
+      - name: Advance main only after the integration checks pass
+        run: |
           git push origin HEAD:main
       - name: Clear the old blocked-sync marker
         env:
