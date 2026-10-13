@@ -166,12 +166,33 @@ describe("official main sync", () => {
     );
     expect(git(sparse, "submodule", "status")).toContain(".repos/alchemy-effect/submodules/floci");
   });
-  it("refuses an upstream commit that moved after checking, without changing the fork", () => {
-    const checked = git(upstream, "rev-parse", "HEAD");
+  it("syncs the checked commit even when official main advances before fetching", () => {
     const original = git(fork, "rev-parse", "HEAD");
-    write(upstream, "feature.txt", "advanced\n");
+    write(upstream, "feature.txt", "checked\n");
     commit(upstream);
-    expect(() => syncMain(fork, upstream, checked)).toThrow("moved");
+    const checked = git(upstream, "rev-parse", "HEAD");
+    write(upstream, "feature.txt", "advanced\n");
+    write(upstream, "later.txt", "next sync\n");
+    commit(upstream);
+    const synced = syncMain(fork, upstream, checked);
+    expect(NodeFS.readFileSync(NodePath.join(fork, "feature.txt"), "utf8")).toBe("checked\n");
+    expect(NodeFS.existsSync(NodePath.join(fork, "later.txt"))).toBe(false);
+    expect(
+      JSON.parse(NodeFS.readFileSync(NodePath.join(fork, "fork-upstream.json"), "utf8")),
+    ).toEqual({
+      repository: "pingdotgg/t3code",
+      branch: "main",
+      commit: checked,
+    });
+    expect(git(fork, "rev-list", "--parents", "-1", "HEAD")).toBe(
+      `${synced} ${original} ${checked}`,
+    );
+    expect(git(fork, "status", "--porcelain")).toBe("");
+    expect(syncMain(fork, upstream, checked)).toBe(synced);
+  });
+  it("leaves the fork unchanged when the checked commit cannot be fetched", () => {
+    const original = git(fork, "rev-parse", "HEAD");
+    expect(() => syncMain(fork, upstream, "0".repeat(40))).toThrow();
     expect(git(fork, "rev-parse", "HEAD")).toBe(original);
     expect(git(fork, "status", "--porcelain")).toBe("");
   });

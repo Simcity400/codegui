@@ -92,10 +92,11 @@ export function syncMain(cwd: string, upstream: string, expected: string): strin
   if (!/^[a-f0-9]{40}$/.test(expected)) throw new Error("Invalid official main commit.");
   if (git(cwd, "status", "--porcelain"))
     throw new Error("Upstream sync requires a clean checkout.");
-  git(cwd, "fetch", "--no-tags", upstream, "+refs/heads/main:refs/fork-sync/main");
-  const commit = git(cwd, "rev-parse", "refs/fork-sync/main");
+  // Fetch the gate's snapshot; newer upstream pushes belong to the next sync.
+  git(cwd, "fetch", "--no-tags", upstream, expected);
+  const commit = git(cwd, "rev-parse", "FETCH_HEAD");
   if (commit !== expected)
-    throw new Error(`Official main moved from ${expected} to ${commit} since it was checked.`);
+    throw new Error(`Fetched official commit ${commit} does not match checked commit ${expected}.`);
   const original = git(cwd, "rev-parse", "HEAD");
   const available = PIPELINE_PATHS.filter((path) => git(cwd, "ls-files", "--", path) !== "");
   try {
