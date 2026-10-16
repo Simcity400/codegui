@@ -3,6 +3,17 @@ title = "T3 Code Personal source scanning"
 [extend]
 useDefault = true
 
+# Upstream's local HTTP/2 test server uses this public, self-signed fixture.
+# Match the full key as well as its test path so other private keys still fail.
+[[allowlists]]
+description = "Exact outbound HTTP TLS test key"
+targetRules = ["private-key"]
+condition = "AND"
+paths = ['''(^|/)apps/server/src/outboundHttp\.test\.ts$''']
+regexes = [
+  '''^-----BEGIN PRIVATE KEY-----\r?\nMIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQg3EwCztQysKTvzdcR\r?\ng0LWq\+axzUd4tHi9PyMdqh7PlGShRANCAARfQpoLgv/tOsHWCLriDza7Ruaey2b7\r?\nmR/nS6mLu6W7\+agkEqDm0mE3F/ngpPjL4Jj0IGadeMcKNKFRSBgiLdfn\r?\n-----END PRIVATE KEY-----$''',
+]
+
 # Public client identifiers from .env.example, not server credentials.
 [[allowlists]]
 description = "Shipped Clerk publishable keys and public OAuth client ID"

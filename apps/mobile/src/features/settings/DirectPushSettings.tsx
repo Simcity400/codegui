@@ -2,8 +2,8 @@ import { useCallback, useSyncExternalStore } from "react";
 import { Alert, Linking } from "react-native";
 import { useAtomSet, useAtomValue } from "@effect/atom-react";
 import { AsyncResult } from "effect/reactivity";
-import { ScreenScrollView } from "../../components/ScreenScrollView";
-import { AppText } from "../../components/AppText";
+import { ScreenScrollView } from "../../components/ui/ScreenScrollView";
+import { AppText } from "../../components/ui/AppText";
 import { runtime } from "../../lib/runtime";
 import { mobilePreferencesAtom, updateMobilePreferencesAtom } from "../../state/preferences";
 import {
