@@ -174,6 +174,7 @@ import {
   resolveMarkdownLinkPresentation,
 } from "../../lib/markdownLinks";
 import {
+  createThreadFeedCache,
   failedFeedRunIds,
   deriveThreadFeedPresentation,
   threadFeedRunIsUnsettled,
@@ -303,6 +304,7 @@ export interface ThreadFeedProps {
   readonly anchorMessageId: MessageId | null;
   readonly submittedMessageId: MessageId | null;
   readonly contentInsetEndAdjustment: SharedValue<number>;
+  readonly keyboardOffset: number;
   readonly contentTopInset?: number;
   readonly contentBottomInset?: number;
   readonly historyControls?: ThreadFeedHistoryControls;
@@ -1681,6 +1683,7 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
   const disclosureSettleFrameRef = useRef<number | null>(null);
   const disclosureSettleSecondFrameRef = useRef<number | null>(null);
   const disclosureAnchorKeyRef = useRef<string | null>(null);
+  const [feedCache] = useState(createThreadFeedCache);
   const previousLatestTurnRef = useRef(props.latestRun);
   const userScrollSettleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const headerMaterialVisibleRef = useRef(false);
@@ -1994,6 +1997,8 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
     themeAppearance,
     userBubbleColor,
     viewportWidth,
+    contentWidth,
+    skills: props.skills,
     workflowOpening,
   };
   const reportHeaderMaterialVisibility = (visible: boolean) => {
@@ -2101,6 +2106,7 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
       ),
       props.activeWorkStartedAt,
       props.runlessWorkActive ?? false,
+      feedCache,
     ),
     props.feed,
     props.queuedMessages,
@@ -2465,6 +2471,7 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
             // content rest below the transparent header rather than at frame top.
             contentInsetStartAdjustment={usesNativeAutomaticInsets ? anchorTopInset : 0}
             contentInsetEndAdjustment={props.contentInsetEndAdjustment}
+            keyboardOffset={props.keyboardOffset}
             // UIKit's automatic behavior adds the safe-area bottom on top of the
             // raw contentInset the keyboard integration writes. The detail screen
             // under-reports the composer inset by this amount (see
