@@ -17,6 +17,7 @@ import type { CodexEffectiveRuntime } from "../../provider/CodexManagedRuntime.t
 import {
   buildCodexInitializeParams,
   codexAppServerEnvironment,
+  codexDefaultReasoningEffortOverride,
 } from "../../provider/CodexProvider.ts";
 import {
   codexRateLimitsToUpdate,
@@ -738,10 +739,9 @@ export function buildCodexTurnStartParams(input: {
       input.runtimePolicy.sandboxPolicy === undefined
         ? runtimeModeDefaults.sandboxPolicy
         : yield* decodeTurnSandboxPolicy(input.runtimePolicy.sandboxPolicy);
-    const selectedEffort = getModelSelectionStringOptionValue(
-      input.modelSelection,
-      "reasoningEffort",
-    );
+    const selectedEffort =
+      getModelSelectionStringOptionValue(input.modelSelection, "reasoningEffort") ??
+      codexDefaultReasoningEffortOverride(input.modelSelection.model);
     const effort =
       selectedEffort === undefined ? undefined : yield* decodeTurnReasoningEffort(selectedEffort);
     const serviceTier =
@@ -764,7 +764,7 @@ export function buildCodexTurnStartParams(input: {
     const t3Context =
       input.hasT3Mcp === true
         ? buildCodexAdditionalContext(
-            { model: input.modelSelection.model, reasoningEffort: effort ?? "medium" },
+            { model: input.modelSelection.model, reasoningEffort: effort ?? undefined },
             {
               browser: input.browserToolsAvailable ?? true,
               device: input.deviceToolsAvailable ?? false,
@@ -782,7 +782,8 @@ export function buildCodexTurnStartParams(input: {
             mode: input.runtimePolicy.interactionMode === "plan" ? "plan" : "default",
             settings: {
               model: input.modelSelection.model,
-              reasoning_effort: effort ?? "medium",
+              // Codex falls back to the model's default effort when this is left out.
+              ...(effort === undefined ? {} : { reasoning_effort: effort }),
               ...(developerInstructions === undefined
                 ? {}
                 : { developer_instructions: developerInstructions }),
@@ -1302,7 +1303,7 @@ export const CODEX_THREAD_CONFIG = {
 // that limit so the server's own wait timeout ends a long call.
 const CODEX_T3_MCP_TOOL_TIMEOUT_SEC = 65 * 60;
 
-export function codexThreadRuntimeParams(input: {
+function codexThreadRuntimeParams(input: {
   readonly mcpSession: McpProviderSession.McpProviderSessionConfig | undefined;
   readonly modelSelection?: { readonly model: string };
   readonly runtimePolicy?: ProviderAdapter.ProviderAdapterV2RuntimePolicy;
@@ -1320,13 +1321,12 @@ export function codexThreadRuntimeParams(input: {
       ...(mcpSession === undefined
         ? {}
         : {
-            mcp_servers: {
-              "t3-code": {
-                url: mcpSession.endpoint,
-                tool_timeout_sec: CODEX_T3_MCP_TOOL_TIMEOUT_SEC,
-                http_headers: {
-                  Authorization: mcpSession.authorizationHeader,
-                },
+            // Override only T3's server so launch-argument MCP servers survive.
+            "mcp_servers.t3-code": {
+              url: mcpSession.endpoint,
+              tool_timeout_sec: CODEX_T3_MCP_TOOL_TIMEOUT_SEC,
+              http_headers: {
+                Authorization: mcpSession.authorizationHeader,
               },
             },
           }),
