@@ -75,3 +75,15 @@ paths = [
   '''(^|/)infra/relay/src/http/Api\.test\.ts$''',
 ]
 regexes = ['''^0123456789abcdef$''', '''^fedcba9876543210$''']
+
+# These are SHA-256 fingerprints of the literal dummy keys in this test, not credentials.
+[[allowlists]]
+description = "OpenCode test credential fingerprints"
+targetRules = ["generic-api-key"]
+condition = "AND"
+paths = ['''(^|/)packages/provider-opencode/src/server/status\.test\.ts$''']
+regexes = [
+  '''^3e45cfde9158185930d4cc7020a4e390895574fd54bd8f9631d23a336bbf94f0$''',
+  '''^d0e590e93fc9bd9353f2b993c0c287391cae505da2a78cb698b75418d2f5367e$''',
+  '''^85649de18e63305548b6407e185f708483727ee6189cc4bc9512ddb17e23e776$''',
+]

@@ -4,6 +4,7 @@ import { describe, expect, it } from "vite-plus/test";
 import {
   configurePushContracts,
   configurePushMobile,
+  configurePushRelay,
   configurePushServer,
   MOBILE_PUSH_HOOKS,
 } from "./configure-fork-push.ts";
@@ -22,6 +23,15 @@ describe("personal Apple push integration", () => {
     expect(server.match(/DirectPush.layer,/g)).toHaveLength(1);
     expect(server).toContain("Layer.provide(DirectPush.httpLayer)");
     expect(configurePushServer(server)).toBe(server);
+  });
+  it("exposes the upstream activity filter when upstream makes it private", () => {
+    const upstream = read("apps/server/src/relay/AgentAwarenessRelay.ts").replace(
+      "export function shouldPublishAgentAwarenessEvent(",
+      "function shouldPublishAgentAwarenessEvent(",
+    );
+    const relay = configurePushRelay(upstream);
+    expect(relay).toContain("export function shouldPublishAgentAwarenessEvent(");
+    expect(configurePushRelay(relay)).toBe(relay);
   });
   it("uses direct delivery only in personal iPhone builds and mounts its settings and coordinator", () => {
     const configured = new Map(
@@ -45,6 +55,7 @@ describe("personal Apple push integration", () => {
   it("stops publishing when an upstream integration point moves", () => {
     expect(() => configurePushContracts("changed contract")).toThrow("changed upstream");
     expect(() => configurePushServer("changed server")).toThrow("changed upstream");
+    expect(() => configurePushRelay("changed relay")).toThrow("changed upstream");
     expect(() => configurePushMobile("changed app", "src/App.tsx")).toThrow("changed upstream");
   });
 });

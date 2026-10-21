@@ -61,6 +61,11 @@ describe("official main sync", () => {
     );
     write(
       upstream,
+      "apps/server/src/relay/AgentAwarenessRelay.ts",
+      "function shouldPublishAgentAwarenessEvent() { return true; }\n",
+    );
+    write(
+      upstream,
       "apps/mobile/src/App.tsx",
       'import { SubscriptionUsageCoordinator } from "./widgets/SubscriptionUsageCoordinator";\n<SubscriptionUsageCoordinator />\n',
     );
@@ -114,6 +119,12 @@ describe("official main sync", () => {
     expect(NodeFS.readFileSync(NodePath.join(fork, "apps/server/src/server.ts"), "utf8")).toContain(
       "DirectPush.layer",
     );
+    expect(
+      NodeFS.readFileSync(
+        NodePath.join(fork, "apps/server/src/relay/AgentAwarenessRelay.ts"),
+        "utf8",
+      ),
+    ).toContain("export function shouldPublishAgentAwarenessEvent(");
     expect(NodeFS.readFileSync(NodePath.join(fork, "apps/mobile/src/App.tsx"), "utf8")).toContain(
       "<DirectPushCoordinator />",
     );

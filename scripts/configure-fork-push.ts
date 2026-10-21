@@ -93,6 +93,13 @@ export function configurePushServer(source: string): string {
   );
 }
 
+/** The personal worker shares upstream's activity filter even when it is private there. */
+export function configurePushRelay(source: string): string {
+  const exported = "export function shouldPublishAgentAwarenessEvent(";
+  if (source.includes(exported)) return source;
+  return replaceOnce(source, "function shouldPublishAgentAwarenessEvent(", exported);
+}
+
 export function configurePushMobile(source: string, file: string): string {
   switch (file) {
     case "src/App.tsx":
@@ -167,6 +174,7 @@ export const MOBILE_PUSH_HOOKS = [
 export const PUSH_HOOK_PATHS = [
   "packages/contracts/src/environmentHttp.ts",
   "apps/server/src/server.ts",
+  "apps/server/src/relay/AgentAwarenessRelay.ts",
   ...MOBILE_PUSH_HOOKS.map((file) => `apps/mobile/${file}`),
 ] as const;
 
@@ -181,8 +189,10 @@ export function configureForkPush(root: string, surface: "mobile" | "server") {
     });
   };
   prepare("packages/contracts/src/environmentHttp.ts", configurePushContracts);
-  if (surface === "server") prepare("apps/server/src/server.ts", configurePushServer);
-  else
+  if (surface === "server") {
+    prepare("apps/server/src/server.ts", configurePushServer);
+    prepare("apps/server/src/relay/AgentAwarenessRelay.ts", configurePushRelay);
+  } else
     for (const file of MOBILE_PUSH_HOOKS)
       prepare(`apps/mobile/${file}`, (source) => configurePushMobile(source, file));
   for (const { path, source } of replacements) NodeFS.writeFileSync(path, source);
